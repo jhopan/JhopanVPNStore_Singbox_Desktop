@@ -32,4 +32,8 @@ From `android/`:
 GitHub Actions workflow file:
 - `.github/workflows/build.yaml`
 
-It builds and uploads all Android ABI artifacts on push/tag/workflow dispatch.
+It now does this flow:
+- One-time publish binary dependencies to release tag `binary-assets` (if not exists yet).
+- Build APKs using binary from that release.
+- Upload APK artifacts on each run.
+- On version tags (`v*`), also publish APK + `libXray.aar` into GitHub Release.

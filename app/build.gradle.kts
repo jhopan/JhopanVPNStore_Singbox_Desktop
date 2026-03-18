@@ -1,8 +1,7 @@
 import java.net.URL
 import java.util.zip.ZipInputStream
 
-// libXray.aar is pre-built in app/libs/ — contains Xray-core as a Go library
-// with native .so for arm64-v8a, armeabi-v7a, x86, x86_64
+// libXray.aar is downloaded on demand from GitHub Release assets.
 
 plugins {
     id("com.android.application")
@@ -145,9 +144,53 @@ dependencies {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Xray-core is now provided by libXray.aar (in-process Go lib).
-//  No binary download needed.
+//  Download libXray.aar from GitHub Release assets.
 // ═══════════════════════════════════════════════════════════════
+val defaultLibXrayAarUrl = "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libXray.aar"
+
+tasks.register("downloadLibXrayAar") {
+    description = "Download libXray.aar from GitHub releases into app/libs"
+    group = "xray"
+
+    val libsDir = file("libs")
+    val target = file("libs/libXray.aar")
+
+    doLast {
+        libsDir.mkdirs()
+        if (target.exists() && target.length() > 0L) {
+            println("✓  libXray.aar already present (${target.length() / 1024} KB)")
+            return@doLast
+        }
+
+        val configuredUrl =
+            System.getenv("LIBXRAY_AAR_URL")
+                ?: (findProperty("libXrayAarUrl") as String?)
+                ?: defaultLibXrayAarUrl
+
+        println("⬇  Downloading libXray.aar from $configuredUrl …")
+
+        try {
+            val connection = URL(configuredUrl).openConnection()
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 180_000
+            connection.connect()
+            connection.getInputStream().use { src ->
+                target.outputStream().use { dst -> src.copyTo(dst) }
+            }
+        } catch (e: Exception) {
+            throw GradleException(
+                "Failed to download libXray.aar. Upload it once to a GitHub Release and set LIBXRAY_AAR_URL if needed.",
+                e
+            )
+        }
+
+        if (!target.exists() || target.length() == 0L) {
+            throw GradleException("libXray.aar download produced an empty file")
+        }
+
+        println("✓  libXray.aar saved (${target.length() / 1024} KB)")
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  Download tun2socks binary (bridges TUN ↔ SOCKS5 proxy).
@@ -216,7 +259,8 @@ tasks.register("downloadTun2socks") {
     }
 }
 
-// Automatically download tun2socks before build
+// Automatically download binary dependencies before build
 tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("downloadLibXrayAar")
     dependsOn("downloadTun2socks")
 }

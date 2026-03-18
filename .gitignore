@@ -39,3 +39,7 @@ diff_backup.txt
 # Android Studio nav/editor
 .navigation/
 .cxx/
+
+# Downloaded binary dependencies (keep out of git)
+app/libs/*.aar
+app/src/main/jniLibs/**/libtun2socks.so
