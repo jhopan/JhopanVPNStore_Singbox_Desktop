@@ -197,16 +197,20 @@ tasks.register("downloadLibXrayAar") {
 //  Run manually:  ./gradlew downloadTun2socks
 // ═══════════════════════════════════════════════════════════════
 val tun2socksVersion = "v2.6.0"
+val defaultTun2socksUrls = mapOf(
+    "arm64-v8a" to "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libtun2socks-arm64-v8a.so",
+    "armeabi-v7a" to "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libtun2socks-armeabi-v7a.so"
+)
 
 tasks.register("downloadTun2socks") {
-    description = "Download tun2socks binary from GitHub releases into jniLibs"
+    description = "Download tun2socks binary into jniLibs (prefer project release assets)"
     group = "xray"
 
     val jniLibsDir = file("src/main/jniLibs")
 
     doLast {
         mapOf(
-            "arm64-v8a"   to "linux-arm64",
+            "arm64-v8a" to "linux-arm64",
             "armeabi-v7a" to "linux-armv7"
         ).forEach { (abi, archName) ->
             val dir = File(jniLibsDir, abi).also { it.mkdirs() }
@@ -217,43 +221,62 @@ tasks.register("downloadTun2socks") {
                 return@forEach
             }
 
-            val url = "https://github.com/xjasonlyu/tun2socks/releases/download/$tun2socksVersion/tun2socks-$archName.zip"
-            println("⬇  Downloading tun2socks $abi from $url …")
+            val envVarName = if (abi == "arm64-v8a") "TUN2SOCKS_ARM64_URL" else "TUN2SOCKS_ARMV7_URL"
+            val primaryUrl =
+                System.getenv(envVarName)
+                    ?: (findProperty("tun2socks.${abi}.url") as String?)
+                    ?: defaultTun2socksUrls.getValue(abi)
+            val fallbackZipUrl = "https://github.com/xjasonlyu/tun2socks/releases/download/$tun2socksVersion/tun2socks-$archName.zip"
 
             try {
-                val tmp = File.createTempFile("tun2socks-$abi", ".zip")
-
-                val connection = URL(url).openConnection()
+                println("⬇  Downloading tun2socks $abi from $primaryUrl …")
+                val connection = URL(primaryUrl).openConnection()
                 connection.connectTimeout = 30_000
                 connection.readTimeout = 120_000
                 connection.connect()
                 connection.getInputStream().use { src ->
-                    tmp.outputStream().use { dst -> src.copyTo(dst) }
+                    target.outputStream().use { dst -> src.copyTo(dst) }
                 }
-
-                var found = false
-                ZipInputStream(tmp.inputStream()).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory && entry.name.startsWith("tun2socks")) {
-                            target.outputStream().use { out -> zis.copyTo(out) }
-                            found = true
-                            break
-                        }
-                        entry = zis.nextEntry
-                    }
-                }
-                tmp.delete()
-
-                if (found) {
-                    target.setExecutable(true)
-                    println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
-                } else {
-                    println("✗  tun2socks binary not found in zip for $abi")
-                }
+                target.setExecutable(true)
+                println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
             } catch (e: Exception) {
-                println("✗  Failed to download tun2socks $abi: ${e.message}")
-                println("   The app will try downloading at runtime instead.")
+                println("✗  Primary URL failed for $abi: ${e.message}")
+                println("⬇  Fallback to upstream tun2socks release: $fallbackZipUrl …")
+
+                try {
+                    val tmp = File.createTempFile("tun2socks-$abi", ".zip")
+                    val connection = URL(fallbackZipUrl).openConnection()
+                    connection.connectTimeout = 30_000
+                    connection.readTimeout = 120_000
+                    connection.connect()
+                    connection.getInputStream().use { src ->
+                        tmp.outputStream().use { dst -> src.copyTo(dst) }
+                    }
+
+                    var found = false
+                    ZipInputStream(tmp.inputStream()).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null) {
+                            if (!entry.isDirectory && entry.name.startsWith("tun2socks")) {
+                                target.outputStream().use { out -> zis.copyTo(out) }
+                                found = true
+                                break
+                            }
+                            entry = zis.nextEntry
+                        }
+                    }
+                    tmp.delete()
+
+                    if (found) {
+                        target.setExecutable(true)
+                        println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
+                    } else {
+                        println("✗  tun2socks binary not found in fallback zip for $abi")
+                    }
+                } catch (fallbackError: Exception) {
+                    println("✗  Failed to download tun2socks $abi: ${fallbackError.message}")
+                    println("   The app will try downloading at runtime instead.")
+                }
             }
         }
     }
