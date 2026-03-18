@@ -197,10 +197,6 @@ tasks.register("downloadLibXrayAar") {
 //  Run manually:  ./gradlew downloadTun2socks
 // ═══════════════════════════════════════════════════════════════
 val tun2socksVersion = "v2.6.0"
-val defaultTun2socksUrls = mapOf(
-    "arm64-v8a" to "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libtun2socks-arm64-v8a.so",
-    "armeabi-v7a" to "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libtun2socks-armeabi-v7a.so"
-)
 
 tasks.register("downloadTun2socks") {
     description = "Download tun2socks binary into jniLibs (prefer project release assets)"
@@ -222,25 +218,53 @@ tasks.register("downloadTun2socks") {
             }
 
             val envVarName = if (abi == "arm64-v8a") "TUN2SOCKS_ARM64_URL" else "TUN2SOCKS_ARMV7_URL"
-            val primaryUrl =
+            val overrideUrl =
                 System.getenv(envVarName)
                     ?: (findProperty("tun2socks.${abi}.url") as String?)
-                    ?: defaultTun2socksUrls.getValue(abi)
             val fallbackZipUrl = "https://github.com/xjasonlyu/tun2socks/releases/download/$tun2socksVersion/tun2socks-$archName.zip"
 
             try {
-                println("⬇  Downloading tun2socks $abi from $primaryUrl …")
-                val connection = URL(primaryUrl).openConnection()
+                val sourceUrl = overrideUrl ?: fallbackZipUrl
+                println("⬇  Downloading tun2socks $abi from $sourceUrl …")
+                val connection = URL(sourceUrl).openConnection()
                 connection.connectTimeout = 30_000
                 connection.readTimeout = 120_000
                 connection.connect()
-                connection.getInputStream().use { src ->
-                    target.outputStream().use { dst -> src.copyTo(dst) }
+                if (overrideUrl != null) {
+                    connection.getInputStream().use { src ->
+                        target.outputStream().use { dst -> src.copyTo(dst) }
+                    }
+                    target.setExecutable(true)
+                    println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
+                } else {
+                    val tmp = File.createTempFile("tun2socks-$abi", ".zip")
+                    connection.getInputStream().use { src ->
+                        tmp.outputStream().use { dst -> src.copyTo(dst) }
+                    }
+
+                    var found = false
+                    ZipInputStream(tmp.inputStream()).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null) {
+                            if (!entry.isDirectory && entry.name.startsWith("tun2socks")) {
+                                target.outputStream().use { out -> zis.copyTo(out) }
+                                found = true
+                                break
+                            }
+                            entry = zis.nextEntry
+                        }
+                    }
+                    tmp.delete()
+
+                    if (found) {
+                        target.setExecutable(true)
+                        println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
+                    } else {
+                        println("✗  tun2socks binary not found in zip for $abi")
+                    }
                 }
-                target.setExecutable(true)
-                println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
             } catch (e: Exception) {
-                println("✗  Primary URL failed for $abi: ${e.message}")
+                println("✗  Primary source failed for $abi: ${e.message}")
                 println("⬇  Fallback to upstream tun2socks release: $fallbackZipUrl …")
 
                 try {

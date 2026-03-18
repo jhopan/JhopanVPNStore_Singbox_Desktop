@@ -11,8 +11,8 @@ Android VPN client berbasis VLESS + Xray dengan UI Jetpack Compose.
 Repository source tidak perlu menyimpan binary besar.
 
 - `libXray.aar` diambil dari GitHub Release tag `binary-assets`.
-- `libtun2socks.so` diambil dari GitHub Release tag `binary-assets`.
-- Jika URL tun2socks dari release gagal, build akan fallback ke upstream tun2socks release.
+- `libtun2socks.so` default diambil dari upstream tun2socks release.
+- Jika dibutuhkan, tun2socks bisa dioverride ke URL release milik sendiri.
 
 Dengan model ini, source repo tetap ringan tapi build lokal/CI tetap jalan.
 
