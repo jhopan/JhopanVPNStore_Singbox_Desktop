@@ -78,6 +78,9 @@ jobs:
           echo "  Target: android/arm64,android/arm"
           echo "========================================="
 
+          # Critical fix for "no Go package in golang.org/x/mobile/bind"
+          # Link the cloned x/mobile source directly into the build context
+          go mod edit -replace golang.org/x/mobile=../golang-mobile
           go mod download
           
           gomobile bind \

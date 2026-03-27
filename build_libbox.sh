@@ -55,6 +55,8 @@ echo "   Tags: ${BUILD_TAGS}"
 echo "   This may take 5-15 minutes..."
 
 # Ensure dependencies are available for gomobile
+# Link the cloned x/mobile source directly into the build context
+go mod edit -replace golang.org/x/mobile="${WORK_DIR_GOMOBILE}"
 go mod download
 
 gomobile bind \
@@ -69,10 +71,10 @@ gomobile bind \
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "${SCRIPT_DIR}/${OUTPUT_DIR}"
 cp libbox.aar "${SCRIPT_DIR}/${OUTPUT_DIR}/libbox.aar"
-cp libbox-sources.jar "${SCRIPT_DIR}/${OUTPUT_DIR}/libbox-sources.jar" 2>/dev/null || true
 
 # Cleanup
-rm -rf "${WORK_DIR}"
+rm -rf "${WORK_DIR_GOMOBILE}"
+rm -rf "${WORK_DIR_SINGBOX}"
 
 echo ""
 echo "═══════════════════════════════════════════"
