@@ -12,7 +12,7 @@ on:
         default: 'v1.11.0'
 
 env:
-  GO_VERSION: '1.22.5'
+  GO_VERSION: '1.23.0'
   SINGBOX_VERSION: 'v1.11.0'
 
 jobs:
@@ -82,7 +82,7 @@ jobs:
             -target=android/arm64,android/arm \
             -androidapi 24 \
             -javapkg=libbox \
-            -tags="with_quic,with_clash_api,with_utls,with_gvisor" \
+            -tags="with_quic,with_clash_api,with_utls" \
             -trimpath \
             -ldflags="-s -w -X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
             ./experimental/libbox

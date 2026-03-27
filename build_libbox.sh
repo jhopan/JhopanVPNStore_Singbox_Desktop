@@ -17,7 +17,7 @@ SINGBOX_VERSION="v1.11.0"
 OUTPUT_DIR="app/libs"
 TARGETS="android/arm64,android/arm"
 JAVA_PKG="libbox"
-BUILD_TAGS="with_quic,with_clash_api,with_utls,with_gvisor"
+BUILD_TAGS="with_quic,with_clash_api,with_utls"
 
 echo "═══════════════════════════════════════════"
 echo "  Building libbox.aar from sing-box ${SINGBOX_VERSION}"
