@@ -54,9 +54,7 @@ jobs:
           cd cmd/gomobile && go install
           cd ../gobind && go install
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-      - name: Initialize gomobile
-        run: gomobile init
+          echo "GOBIND=$(go env GOPATH)/bin/gobind" >> $GITHUB_ENV
 
       - name: Determine sing-box version
         run: |

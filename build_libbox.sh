@@ -39,10 +39,8 @@ git checkout fa514ef
 cd cmd/gomobile && go install
 cd ../gobind && go install
 export PATH="$PATH:$(go env GOPATH)/bin"
+export GOBIND="$(go env GOPATH)/bin/gobind"
 export GOFLAGS="-gcflags=all=-l"
-
-echo "⬇ Initializing gomobile..."
-gomobile init
 
 # Clone sing-box
 WORK_DIR_SINGBOX=$(mktemp -d)
