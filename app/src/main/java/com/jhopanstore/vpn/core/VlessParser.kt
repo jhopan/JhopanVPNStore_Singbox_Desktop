@@ -1,6 +1,5 @@
 package com.jhopanstore.vpn.core
 
-import java.net.URI
 import java.net.URLDecoder
 
 /**
@@ -15,7 +14,8 @@ data class VlessConfig(
     val host: String = "",
     val security: String = "tls",
     val type: String = "ws",
-    val allowInsecure: Boolean = true
+    val allowInsecure: Boolean = true,
+    val remark: String = ""  // from URI fragment (#name)
 )
 
 object VlessParser {
@@ -31,7 +31,15 @@ object VlessParser {
             val withoutScheme = trimmed.removePrefix("vless://")
 
             // Split off fragment (#name)
-            val withoutFragment = withoutScheme.substringBefore("#")
+            val fragmentIndex = withoutScheme.indexOf("#")
+            val withoutFragment = if (fragmentIndex >= 0) withoutScheme.substring(0, fragmentIndex) else withoutScheme
+            val remark = if (fragmentIndex >= 0) {
+                try {
+                    URLDecoder.decode(withoutScheme.substring(fragmentIndex + 1), "UTF-8")
+                } catch (_: Exception) {
+                    withoutScheme.substring(fragmentIndex + 1)
+                }
+            } else ""
 
             // Split UUID from rest
             val atIndex = withoutFragment.indexOf('@')
@@ -96,7 +104,8 @@ object VlessParser {
                 host = params["host"] ?: address,
                 security = params["security"] ?: "tls",
                 type = params["type"] ?: "ws",
-                allowInsecure = params["allowInsecure"]?.toBoolean() ?: true
+                allowInsecure = params["allowInsecure"]?.toBoolean() ?: true,
+                remark = remark
             )
 
             Result.success(config)

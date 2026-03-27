@@ -15,14 +15,12 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
-import android.system.Os
-import android.system.OsConstants
 import android.util.Log
 import com.jhopanstore.vpn.MainActivity
 import com.jhopanstore.vpn.R
-import com.jhopanstore.vpn.core.Tun2socksManager
+import com.jhopanstore.vpn.core.SingboxManager
 import com.jhopanstore.vpn.core.VlessConfig
-import com.jhopanstore.vpn.core.XrayManager
+import com.jhopanstore.vpn.core.VlessParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,20 +30,25 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import libXray.LibXray
+import libbox.CommandServer
+import libbox.CommandServerHandler
+import libbox.Libbox
+import libbox.PlatformInterface
+import libbox.SetupOptions
+import libbox.TunOptions
 import java.io.IOException
 
 /**
- * Android VpnService that creates a TUN interface and routes traffic
- * through Xray (via libXray in-process) + tun2socks bridge.
+ * Android VpnService that routes traffic through sing-box core (via libbox).
  *
- * Traffic flow:
- *   Apps → TUN fd → tun2socks → SOCKS5 → Xray (libXray) → internet
+ * Architecture (simplified from previous Xray + tun2socks):
+ *   Apps → sing-box (TUN built-in + urltest) → internet
  *
- * Key improvement with libXray:
- *   - registerDialerController(protectFd) ensures Xray's outgoing sockets
- *     are protected from VPN routing (prevents routing loops)
- *   - No xray binary process to manage
+ * Key improvements:
+ *   - All-in-one: sing-box handles TUN, proxy, DNS internally
+ *   - No tun2socks binary, no JNI fork helper
+ *   - urltest outbound group: automatic failover, zero-restart
+ *   - PlatformInterface: VPN socket protection + TUN management
  */
 class JhopanVpnService : VpnService() {
 
@@ -59,6 +62,7 @@ class JhopanVpnService : VpnService() {
         private const val ACTION_UPDATE_NOTIFICATION_PREFS = "ACTION_UPDATE_NOTIFICATION_PREFS"
         private const val ACTION_UPDATE_RUNTIME_PREFS = "ACTION_UPDATE_RUNTIME_PREFS"
         const val EXTRA_VLESS_URI = "vless_uri"
+        const val EXTRA_BACKUP_URIS = "backup_uris"  // JSON array of backup VLESS URIs
         const val EXTRA_DNS1 = "dns1"
         const val EXTRA_DNS2 = "dns2"
         const val EXTRA_MTU = "mtu"
@@ -70,45 +74,31 @@ class JhopanVpnService : VpnService() {
         const val EXTRA_KEEP_ALIVE_INTERVAL_SEC = "keep_alive_interval_sec"
         const val EXTRA_MAX_RECONNECT = "max_reconnect_attempts"
         const val EXTRA_NETWORK_DELAY = "network_delay"
+        const val EXTRA_URLTEST_URL = "urltest_url"
+        const val EXTRA_URLTEST_INTERVAL = "urltest_interval"
+        const val EXTRA_URLTEST_TOLERANCE = "urltest_tolerance"
         private var maxReconnectAttempts = 3
         private var networkReconnectDelaySeconds = 2
         private const val DEFAULT_MTU = 1400
 
         data class UsageSnapshot(val downloadBytes: Long, val uploadBytes: Long)
 
-        @Volatile
-        private var usageTrackingActive = false
-
-        @Volatile
-        private var usageStartRxBytes = 0L
-
-        @Volatile
-        private var usageStartTxBytes = 0L
-
-        @Volatile
-        private var notifyUsageEnabled = false
-
-        @Volatile
-        private var notifySpeedEnabled = false
-
-        @Volatile
-        private var wakeLockEnabled = false
-
-        @Volatile
-        private var keepAliveEnabled = false
-
-        @Volatile
-        private var keepAliveIntervalSeconds = 45
+        @Volatile private var usageTrackingActive = false
+        @Volatile private var usageStartRxBytes = 0L
+        @Volatile private var usageStartTxBytes = 0L
+        @Volatile private var notifyUsageEnabled = false
+        @Volatile private var notifySpeedEnabled = false
+        @Volatile private var wakeLockEnabled = false
+        @Volatile private var keepAliveEnabled = false
+        @Volatile private var keepAliveIntervalSeconds = 45
 
         @Volatile
         var isRunning = false
             private set
 
-        // StateFlow untuk UI — ViewModel collect ini, tidak perlu polling
         private val _state = MutableStateFlow(VpnState.DISCONNECTED)
         val state: StateFlow<VpnState> = _state
 
-        // Flag untuk cancel background thread saat stop dipanggil
         @Volatile
         var isStopping = false
             private set
@@ -146,11 +136,13 @@ class JhopanVpnService : VpnService() {
             return UsageSnapshot(download, upload)
         }
 
-        fun start(context: Context, 
-            vlessUri: String, 
-            dns1: String, 
-            dns2: String, 
-            mtu: Int, 
+        fun start(
+            context: Context,
+            vlessUri: String,
+            backupUris: String,  // JSON array string
+            dns1: String,
+            dns2: String,
+            mtu: Int,
             autoReconnect: Boolean,
             notifyUsageEnabled: Boolean,
             notifySpeedEnabled: Boolean,
@@ -158,10 +150,14 @@ class JhopanVpnService : VpnService() {
             keepAliveEnabled: Boolean,
             keepAliveIntervalSeconds: Int,
             maxReconnect: Int,
-            reconnectDelay: Int
-        )  {
+            reconnectDelay: Int,
+            urlTestUrl: String,
+            urlTestInterval: String,
+            urlTestTolerance: Int
+        ) {
             val intent = Intent(context, JhopanVpnService::class.java).apply {
                 putExtra(EXTRA_VLESS_URI, vlessUri)
+                putExtra(EXTRA_BACKUP_URIS, backupUris)
                 putExtra(EXTRA_DNS1, dns1)
                 putExtra(EXTRA_DNS2, dns2)
                 putExtra(EXTRA_MTU, normalizeMtu(mtu))
@@ -173,6 +169,9 @@ class JhopanVpnService : VpnService() {
                 putExtra(EXTRA_KEEP_ALIVE_INTERVAL_SEC, keepAliveIntervalSeconds)
                 putExtra(EXTRA_MAX_RECONNECT, maxReconnect)
                 putExtra(EXTRA_NETWORK_DELAY, reconnectDelay)
+                putExtra(EXTRA_URLTEST_URL, urlTestUrl)
+                putExtra(EXTRA_URLTEST_INTERVAL, urlTestInterval)
+                putExtra(EXTRA_URLTEST_TOLERANCE, urlTestTolerance)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -221,6 +220,7 @@ class JhopanVpnService : VpnService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private var commandServer: CommandServer? = null
     private var tunFd: ParcelFileDescriptor? = null
     private var reconnectWakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -238,31 +238,148 @@ class JhopanVpnService : VpnService() {
 
     // State for auto-reconnect
     private var lastVlessUri: String? = null
+    private var lastBackupUris: String = "[]"
     private var lastDns1: String = "8.8.8.8"
     private var lastDns2: String = "8.8.4.4"
     private var lastMtu: Int = DEFAULT_MTU
+    private var lastUrlTestUrl: String = "https://www.gstatic.com/generate_204"
+    private var lastUrlTestInterval: String = "30s"
+    private var lastUrlTestTolerance: Int = 100
     private var autoReconnect = false
     private var reconnectAttempts = 0
+
+    // ── PlatformInterface ──────────────────────────────────────────
+    // sing-box calls these when it needs platform-specific operations
+
+    private val platformInterface = object : PlatformInterface {
+        override fun autoDetectInterfaceControl(fd: Int) {
+            // Protect socket from VPN routing loop
+            val ok = protect(fd)
+            if (!ok) Log.w(TAG, "Failed to protect fd=$fd")
+        }
+
+        override fun openTun(options: TunOptions): Int {
+            // Build VPN TUN interface using Android VpnService.Builder
+            val builder = Builder()
+                .setSession("JhopanStoreVPN")
+                .setMtu(options.mtu)
+
+            // Add addresses from sing-box config
+            try {
+                val inet4Addr = options.inet4Address
+                if (inet4Addr != null && inet4Addr.hasNext()) {
+                    while (inet4Addr.hasNext()) {
+                        val prefix = inet4Addr.next()
+                        builder.addAddress(prefix.address(), prefix.mask())
+                    }
+                } else {
+                    builder.addAddress("172.19.0.1", 30)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Using default TUN address: ${e.message}")
+                builder.addAddress("172.19.0.1", 30)
+            }
+
+            // Add routes
+            builder.addRoute("0.0.0.0", 0)
+
+            // Add DNS servers
+            builder.addDnsServer(lastDns1.ifBlank { "8.8.8.8" })
+            builder.addDnsServer(lastDns2.ifBlank { "8.8.4.4" })
+
+            // Exclude our own app
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (_: Exception) {}
+
+            tunFd = builder.establish()
+            if (tunFd == null) {
+                Log.e(TAG, "Failed to establish TUN interface")
+                return -1
+            }
+
+            val fd = tunFd!!.fd
+            Log.i(TAG, "TUN established, fd=$fd")
+            return fd
+        }
+
+        override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+        override fun autoDetectControl(fd: Int) { protect(fd) }
+        override fun findProcessInfo(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): libbox.ProcessInfo? = null
+        override fun packageNameByUid(uid: Int): String = ""
+        override fun uidByPackageName(packageName: String): Int = 0
+        override fun usePlatformDefaultInterfaceMonitor(): Boolean = true
+        override fun startDefaultInterfaceMonitor(listener: libbox.InterfaceUpdateListener) {}
+        override fun closeDefaultInterfaceMonitor(listener: libbox.InterfaceUpdateListener) {}
+        override fun usePlatformInterfaceGetter(): Boolean = false
+        override fun getInterfaces(): libbox.NetworkInterfaceIterator? = null
+        override fun underNetworkExtension(): Boolean = false
+        override fun includeAllNetworks(): Boolean = false
+        override fun readWIFIState(): libbox.WIFIState? = null
+        override fun clearDNSCache() {}
+    }
+
+    // ── CommandServerHandler ──────────────────────────────────────
+    // Lifecycle callbacks from sing-box
+
+    private val serverHandler = object : CommandServerHandler {
+        override fun serviceStarted() {
+            Log.i(TAG, "sing-box service started")
+            isRunning = true
+            SingboxManager.markRunning()
+            _state.value = VpnState.CONNECTED
+            reconnectAttempts = 0
+        }
+
+        override fun serviceReload(options: libbox.OverrideOptions?) {
+            Log.i(TAG, "sing-box service reloading")
+        }
+
+        override fun serviceClose(message: String?) {
+            Log.i(TAG, "sing-box service closing: $message")
+        }
+
+        override fun postServiceClose() {
+            Log.i(TAG, "sing-box service closed")
+            SingboxManager.markStopped()
+            if (!isStopping) {
+                // Unexpected stop
+                Log.w(TAG, "sing-box stopped unexpectedly")
+                SingboxManager.onServiceStopped?.invoke()
+            }
+        }
+
+        override fun getSystemProxyStatus(): libbox.SystemProxyStatus? = null
+        override fun setSystemProxyEnabled(isEnabled: Boolean) {}
+
+        override fun postNotification(notification: libbox.Notification?) {}
+        override fun clearNotification(id: Int) {}
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
 
-        // Register VPN socket protection callback with libXray.
-        // When Xray creates outgoing connections, protectFd() is called
-        // so those sockets bypass the VPN TUN → prevents routing loops.
-        LibXray.registerDialerController(object : libXray.DialerController {
-            override fun protectFd(fd: Long): Boolean {
-                val protected_ = protect(fd.toInt())
-                if (!protected_) {
-                    Log.w(TAG, "Failed to protect fd=$fd")
-                }
-                return protected_
-            }
-        })
-        Log.i(TAG, "Registered DialerController for socket protection")
+        // Initialize libbox
+        try {
+            val options = SetupOptions()
+            options.basePath = filesDir.absolutePath
+            Libbox.setup(options)
+            Log.i(TAG, "libbox setup complete, version=${Libbox.version()}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to setup libbox", e)
+        }
 
-        // Monitor network changes — reconnect when network comes back after loss
+        // Create CommandServer
+        try {
+            commandServer = CommandServer(serverHandler, platformInterface)
+            commandServer?.start()
+            Log.i(TAG, "CommandServer started")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create CommandServer", e)
+        }
+
+        // Monitor network changes
         registerNetworkCallback()
     }
 
@@ -311,6 +428,7 @@ class JhopanVpnService : VpnService() {
             return START_NOT_STICKY
         }
 
+        val backupUris = intent.getStringExtra(EXTRA_BACKUP_URIS) ?: "[]"
         val dns1 = intent.getStringExtra(EXTRA_DNS1) ?: "8.8.8.8"
         val dns2 = intent.getStringExtra(EXTRA_DNS2) ?: "8.8.4.4"
         val mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU).coerceIn(1280, 1500)
@@ -322,52 +440,85 @@ class JhopanVpnService : VpnService() {
         keepAliveIntervalSeconds = intent.getIntExtra(EXTRA_KEEP_ALIVE_INTERVAL_SEC, keepAliveIntervalSeconds).coerceIn(20, 300)
         maxReconnectAttempts = intent.getIntExtra(EXTRA_MAX_RECONNECT, maxReconnectAttempts)
         networkReconnectDelaySeconds = intent.getIntExtra(EXTRA_NETWORK_DELAY, networkReconnectDelaySeconds)
+        val urlTestUrl = intent.getStringExtra(EXTRA_URLTEST_URL) ?: "https://www.gstatic.com/generate_204"
+        val urlTestInterval = intent.getStringExtra(EXTRA_URLTEST_INTERVAL) ?: "30s"
+        val urlTestTolerance = intent.getIntExtra(EXTRA_URLTEST_TOLERANCE, 100)
 
-        // Reset flag setiap kali ada koneksi baru
         isStopping = false
         _state.value = VpnState.CONNECTING
 
         startForeground(NOTIFICATION_ID, buildNotification("Connecting..."))
 
         serviceScope.launch {
-            connect(vlessUri, dns1, dns2, mtu)
+            connect(vlessUri, backupUris, dns1, dns2, mtu, urlTestUrl, urlTestInterval, urlTestTolerance)
         }
 
         return START_STICKY
     }
 
-    private suspend fun connect(vlessUri: String, dns1: String, dns2: String, mtu: Int) {
+    private suspend fun connect(
+        vlessUri: String,
+        backupUris: String,
+        dns1: String,
+        dns2: String,
+        mtu: Int,
+        urlTestUrl: String,
+        urlTestInterval: String,
+        urlTestTolerance: Int
+    ) {
         try {
             // Save for reconnection
             lastVlessUri = vlessUri
+            lastBackupUris = backupUris
             lastDns1 = dns1
             lastDns2 = dns2
             lastMtu = mtu
+            lastUrlTestUrl = urlTestUrl
+            lastUrlTestInterval = urlTestInterval
+            lastUrlTestTolerance = urlTestTolerance
             reconnectAttempts = 0
 
             if (isStopping) return
 
-            val parseResult = com.jhopanstore.vpn.core.VlessParser.parse(vlessUri)
-            val cfg = parseResult.getOrElse {
-                Log.e(TAG, "Failed to parse VLESS URI", it)
+            // Parse main account
+            val mainCfg = VlessParser.parse(vlessUri).getOrElse {
+                Log.e(TAG, "Failed to parse main VLESS URI", it)
                 _state.value = VpnState.FAILED
                 updateNotification("Parse error")
                 stopSelf()
                 return
             }
 
-            // Pre-resolve proxy server domain to IP BEFORE VPN TUN is established
-            val resolvedIp = XrayManager.resolveDomain(cfg.address)
-            Log.i(TAG, "Proxy server: ${cfg.address} -> ${resolvedIp ?: "unresolved (using domain)"}")
+            // Parse backup accounts
+            val allAccounts = mutableListOf(mainCfg)
+            try {
+                val backupArray = org.json.JSONArray(backupUris)
+                for (i in 0 until backupArray.length()) {
+                    val uri = backupArray.getString(i)
+                    VlessParser.parse(uri).getOrNull()?.let { allAccounts.add(it) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse backup URIs: ${e.message}")
+            }
 
-            // Set up death callback for auto-reconnect (iteratif, bukan rekursif)
-            XrayManager.onProcessDied = {
+            Log.i(TAG, "Accounts: ${allAccounts.size} total (1 main + ${allAccounts.size - 1} backup)")
+
+            // Pre-resolve proxy server domains BEFORE VPN TUN is up
+            val resolvedIps = mutableMapOf<String, String>()
+            allAccounts.forEach { cfg ->
+                SingboxManager.resolveDomain(cfg.address)?.let {
+                    resolvedIps[cfg.address] = it
+                    Log.i(TAG, "Resolved: ${cfg.address} → $it")
+                }
+            }
+
+            // Set up auto-reconnect callback
+            SingboxManager.onServiceStopped = {
                 if (autoReconnect && lastVlessUri != null) {
                     serviceScope.launch {
-                        // Cegah CPU sleep saat proses reconnect di Doze mode
                         val pm = getSystemService(POWER_SERVICE) as PowerManager
                         val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jhopanvpn:reconnect")
-                        wl.acquire(60_000L) // max 60 detik
+                        wl.acquire(60_000L)
                         reconnectWakeLock = wl
                         try {
                             var success = false
@@ -377,51 +528,47 @@ class JhopanVpnService : VpnService() {
                                     networkReconnectDelaySeconds * 1000L,
                                     minOf(3000L shl (reconnectAttempts - 1), 60_000L)
                                 )
-                                Log.w(TAG, "Xray died, reconnecting in ${waitMs}ms (attempt $reconnectAttempts)")
+                                Log.w(TAG, "Reconnecting in ${waitMs}ms (attempt $reconnectAttempts)")
+                                _state.value = VpnState.CONNECTING
                                 updateNotification("Reconnecting ($reconnectAttempts)...")
                                 delay(waitMs)
 
-                                // Bersihkan state lama
-                                Tun2socksManager.stop()
+                                // Close old TUN
                                 try { tunFd?.close() } catch (_: Exception) {}
                                 tunFd = null
 
-                                // Restart Xray
+                                // Rebuild config and restart service
                                 val uri = lastVlessUri ?: break
-                                val parsedCfg = com.jhopanstore.vpn.core.VlessParser.parse(uri).getOrNull() ?: break
-                                val reconnectResolvedIp = XrayManager.resolveDomain(parsedCfg.address)
-                                val xrayStarted = XrayManager.start(this@JhopanVpnService, parsedCfg, lastDns1, lastDns2, reconnectResolvedIp)
-                                if (!xrayStarted) continue
+                                val reCfg = VlessParser.parse(uri).getOrNull() ?: break
+                                val reAccounts = mutableListOf(reCfg)
+                                try {
+                                    val arr = org.json.JSONArray(lastBackupUris)
+                                    for (i in 0 until arr.length()) {
+                                        VlessParser.parse(arr.getString(i)).getOrNull()?.let { reAccounts.add(it) }
+                                    }
+                                } catch (_: Exception) {}
 
-                                // Probe SOCKS5 port — proceed as soon as ready, max 5s
-                                var portUp = false
-                                for (probe in 0 until 20) {
-                                    try {
-                                        java.net.Socket("127.0.0.1", XrayManager.SOCKS_PORT).close()
-                                        portUp = true
-                                    } catch (_: Exception) {}
-                                    if (portUp) break
-                                    delay(250)
+                                val reResolved = mutableMapOf<String, String>()
+                                reAccounts.forEach { c ->
+                                    SingboxManager.resolveDomain(c.address)?.let { reResolved[c.address] = it }
                                 }
-                                if (!portUp) { XrayManager.stop(); continue }
 
-                                // Re-establish TUN
-                                val builder = Builder()
-                                    .setSession("JhopanStoreVPN")
-                                    .addAddress("10.0.0.2", 24)
-                                    .addRoute("0.0.0.0", 0)
-                                    .addDnsServer(lastDns1.ifBlank { "8.8.8.8" })
-                                    .addDnsServer(lastDns2.ifBlank { "8.8.4.4" })
-                                    .setMtu(lastMtu)
-                                builder.addDisallowedApplication(packageName)
-                                tunFd = builder.establish()
-                                if (tunFd == null) { XrayManager.stop(); continue }
+                                val configJson = SingboxManager.buildConfig(
+                                    reAccounts, lastDns1, lastDns2, reResolved,
+                                    lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance, lastMtu
+                                )
 
-                                val tun2socksOk = Tun2socksManager.start(this@JhopanVpnService, tunFd!!.fd)
-                                if (!tun2socksOk) { XrayManager.stop(); tunFd?.close(); tunFd = null; continue }
-
-                                success = true
+                                try {
+                                    commandServer?.startOrReloadService(configJson, null)
+                                    delay(2000)  // Give sing-box time to start
+                                    if (SingboxManager.isRunning()) {
+                                        success = true
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Reconnect failed: ${e.message}")
+                                }
                             }
+
                             if (success) {
                                 reconnectAttempts = 0
                                 isRunning = true
@@ -447,108 +594,61 @@ class JhopanVpnService : VpnService() {
                 }
             }
 
-            // Start Xray core via libXray (in-process) — iterative retry, no stack accumulation
+            // Build sing-box config
             if (isStopping) return
+            updateNotification("Building config...")
+
+            val configJson = SingboxManager.buildConfig(
+                allAccounts, dns1, dns2, resolvedIps,
+                urlTestUrl, urlTestInterval, urlTestTolerance, mtu
+            )
+
+            // Validate config
+            try {
+                Libbox.checkConfig(configJson)
+                Log.i(TAG, "Config validation passed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Config validation failed: ${e.message}")
+                _state.value = VpnState.FAILED
+                updateNotification("Config error")
+                stopSelf()
+                return
+            }
+
+            // Start sing-box service
+            // This will trigger PlatformInterface.openTun() which creates the TUN
+            if (isStopping) return
+            updateNotification("Starting sing-box...")
 
             var started = false
             while (!started && !isStopping) {
-                started = XrayManager.start(this@JhopanVpnService, cfg, dns1, dns2, resolvedIp)
-                if (!started) {
+                try {
+                    commandServer?.startOrReloadService(configJson, null)
+                    started = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start sing-box: ${e.message}")
                     if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
                         reconnectAttempts++
                         val waitMs = maxOf(
                             networkReconnectDelaySeconds * 1000L,
                             minOf(3000L shl (reconnectAttempts - 1), 60_000L)
                         )
-                        Log.w(TAG, "Retrying Xray start in ${waitMs}ms (attempt $reconnectAttempts)")
+                        Log.w(TAG, "Retrying start in ${waitMs}ms (attempt $reconnectAttempts)")
                         updateNotification("Retry ($reconnectAttempts)...")
                         delay(waitMs)
                     } else {
-                        Log.e(TAG, "Failed to start Xray — giving up")
                         _state.value = VpnState.FAILED
-                        updateNotification("Xray start failed")
+                        updateNotification("Start failed")
                         stopSelf()
                         return
                     }
                 }
             }
-            if (isStopping) { XrayManager.stop(); return }
+            if (isStopping) { commandServer?.closeService(); return }
 
-            // Probe SOCKS5 port until ready — max 10s (typically ready in 200-500ms)
-            updateNotification("Waiting for Xray...")
-            var portReady = false
-            for (probe in 0 until 40) {
-                if (isStopping) { XrayManager.stop(); return }
-                try {
-                    java.net.Socket("127.0.0.1", XrayManager.SOCKS_PORT).close()
-                    portReady = true
-                } catch (_: Exception) {}
-                if (portReady) break
-                delay(250)
-            }
-            if (!portReady) {
-                Log.e(TAG, "Xray SOCKS5 port not ready after 10s")
-                XrayManager.stop()
-                _state.value = VpnState.FAILED
-                updateNotification("Xray timeout")
-                stopSelf()
-                return
-            }
+            // Wait briefly for service to stabilize
+            delay(1500)
 
-            // Establish TUN interface
-            val builder = Builder()
-                .setSession("JhopanStoreVPN")
-                .addAddress("10.0.0.2", 24)
-                .addRoute("0.0.0.0", 0)
-                .addDnsServer(dns1.ifBlank { "8.8.8.8" })
-                .addDnsServer(dns2.ifBlank { "8.8.4.4" })
-                .setMtu(mtu)
-
-            // Exclude our own app as defense-in-depth (protectFd handles this too)
-            builder.addDisallowedApplication(packageName)
-
-            if (isStopping) {
-                XrayManager.stop()
-                return
-            }
-
-            tunFd = builder.establish()
-            if (tunFd == null) {
-                Log.e(TAG, "Failed to establish TUN interface")
-                XrayManager.stop()
-                _state.value = VpnState.FAILED
-                updateNotification("TUN failed")
-                stopSelf()
-                return
-            }
-
-            val tunFdNum = tunFd!!.fd
-            Log.d(TAG, "TUN fd number: $tunFdNum")
-
-            // Clear O_CLOEXEC flag so tun2socks child process can inherit the fd
-            try {
-                val fileDescriptor = tunFd!!.fileDescriptor
-                val flags = Os.fcntlInt(fileDescriptor, OsConstants.F_GETFD, 0)
-                Os.fcntlInt(fileDescriptor, OsConstants.F_SETFD, flags and OsConstants.FD_CLOEXEC.inv())
-                Log.d(TAG, "Cleared O_CLOEXEC on TUN fd")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to clear O_CLOEXEC: ${e.message}")
-            }
-
-            // Start tun2socks to bridge TUN ↔ Xray SOCKS5 proxy
-            val tun2socksStarted = Tun2socksManager.start(this@JhopanVpnService, tunFdNum)
-            if (!tun2socksStarted) {
-                Log.e(TAG, "Failed to start tun2socks")
-                XrayManager.stop()
-                tunFd?.close()
-                tunFd = null
-                _state.value = VpnState.FAILED
-                updateNotification("tun2socks failed")
-                stopSelf()
-                return
-            }
-
-            // Cek sekali lagi: kalau isStopping, jangan set CONNECTED
             if (isStopping) {
                 disconnect()
                 return
@@ -564,7 +664,7 @@ class JhopanVpnService : VpnService() {
             isRunning = true
             reconnectAttempts = 0
             _state.value = VpnState.CONNECTED
-            Log.i(TAG, "VPN connected successfully (libXray + tun2socks)")
+            Log.i(TAG, "VPN connected successfully (sing-box)")
             updateNotification("Connected")
             ensureNotificationStatsLoop()
             applyStableWakeLockMode()
@@ -580,6 +680,7 @@ class JhopanVpnService : VpnService() {
 
     private fun disconnect() {
         isRunning = false
+        SingboxManager.markStopped()
         clearUsageSession()
         notificationStatsJob?.cancel()
         notificationStatsJob = null
@@ -589,16 +690,19 @@ class JhopanVpnService : VpnService() {
         stableWakeLockRefreshJob = null
         stableWakeLock?.let { if (it.isHeld) it.release() }
         stableWakeLock = null
-        XrayManager.onProcessDied = null
+        SingboxManager.onServiceStopped = null
 
-        // Release WakeLock jika masih aktif dari proses reconnect
         reconnectWakeLock?.let { if (it.isHeld) it.release() }
         reconnectWakeLock = null
 
-        // Stop in reverse order: tun2socks first, then TUN, then Xray
-        Tun2socksManager.stop()
-        XrayManager.stop()
+        // Stop sing-box service
+        try {
+            commandServer?.closeService()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing sing-box service: ${e.message}")
+        }
 
+        // Close TUN
         try {
             tunFd?.close()
         } catch (e: IOException) {
@@ -614,6 +718,10 @@ class JhopanVpnService : VpnService() {
     override fun onDestroy() {
         unregisterNetworkCallback()
         disconnect()
+        try {
+            commandServer?.close()
+        } catch (_: Exception) {}
+        commandServer = null
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -627,16 +735,6 @@ class JhopanVpnService : VpnService() {
 
     // --- Network callback ---
 
-    /**
-     * Register a NetworkCallback that triggers reconnect when network is restored
-     * while the VPN is in DISCONNECTED or FAILED state.
-     *
-     * Scenario: user is connected → network drops → Xray dies → state goes FAILED/DISCONNECTED
-     * → network comes back → this callback fires → VPN reconnects automatically.
-     *
-     * We intentionally do NOT reconnect if state is CONNECTING or CONNECTED to avoid
-     * racing against an in-progress connection attempt.
-     */
     private fun registerNetworkCallback() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -649,8 +747,9 @@ class JhopanVpnService : VpnService() {
                         _state.value = VpnState.CONNECTING
                         updateNotification("Reconnecting...")
                         serviceScope.launch {
-                            delay(networkReconnectDelaySeconds * 1000L) // allow network to stabilize based on user setting
-                            connect(uri, lastDns1, lastDns2, lastMtu)
+                            delay(networkReconnectDelaySeconds * 1000L)
+                            connect(uri, lastBackupUris, lastDns1, lastDns2, lastMtu,
+                                lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance)
                         }
                     }
                 }
@@ -686,7 +785,6 @@ class JhopanVpnService : VpnService() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "JhopanStoreVPN",
-                // LOW: persistent notification without sound/vibration → less battery
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "VPN connection status"
@@ -715,8 +813,7 @@ class JhopanVpnService : VpnService() {
                 putExtra(MainActivity.EXTRA_OPEN_FROM_NOTIFICATION, true)
             }
             contentPendingIntent = PendingIntent.getActivity(
-                this, 0,
-                openAppIntent,
+                this, 0, openAppIntent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
@@ -800,7 +897,6 @@ class JhopanVpnService : VpnService() {
                 try {
                     val wl = stableWakeLock ?: break
                     if (!wl.isHeld) {
-                        // Bound hold time to avoid accidental endless lock on edge cases.
                         wl.acquire(10 * 60 * 1000L)
                     }
                 } catch (e: Exception) {
@@ -825,11 +921,9 @@ class JhopanVpnService : VpnService() {
             val intervalMs = (keepAliveIntervalSeconds.coerceIn(20, 300) * 1000L)
             while (isRunning && keepAliveEnabled) {
                 try {
-                    // Lightweight local probe to keep user-space pipeline warm without heavy traffic.
-                    java.net.Socket("127.0.0.1", XrayManager.SOCKS_PORT).close()
-                } catch (_: Exception) {
-                    // Keep-alive probe is best-effort; monitor/reconnect paths handle failures.
-                }
+                    // Lightweight probe to the mixed inbound
+                    java.net.Socket("127.0.0.1", SingboxManager.SOCKS_PORT).close()
+                } catch (_: Exception) {}
                 delay(intervalMs)
             }
             keepAliveJob = null
@@ -891,8 +985,3 @@ class JhopanVpnService : VpnService() {
         return String.format("%.2f GB", value / (1024.0 * 1024.0 * 1024.0))
     }
 }
-
-
-
-
-

@@ -1,7 +1,7 @@
 import java.net.URL
-import java.util.zip.ZipInputStream
 
-// libXray.aar is downloaded on demand from GitHub Release assets.
+// libbox.aar (sing-box) replaces libXray.aar.
+// Build libbox.aar from source using build_libbox.sh, or download a pre-built version.
 
 plugins {
     id("com.android.application")
@@ -16,19 +16,15 @@ android {
         applicationId = "com.jhopanstore.vpn"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0-singbox"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-        }
-    }
+    // No CMake/JNI needed — sing-box handles everything in-process via libbox.aar
 
     // ─── Build Flavors ────────────────────────────────────────────────────────
     // 'full'  → arm64-v8a + armeabi-v7a + x86_64 + x86  (phones + emulators)
@@ -61,14 +57,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Use debug signing for now (replace with proper keystore for production)
             signingConfig = signingConfigs.getByName("debug")
-            // Strip debug symbols from native .so (default is RelWithDebInfo which bloats APK)
-            externalNativeBuild {
-                cmake {
-                    arguments("-DCMAKE_BUILD_TYPE=Release")
-                }
-            }
         }
     }
 
@@ -93,25 +82,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-        jniLibs {
-            useLegacyPackaging = true
-        }
     }
 
     // ─── Per-ABI APK Splits ───────────────────────────────────────────────────
-    // Combined with flavorDimensions above, Gradle produces per-ABI + per-flavor APKs:
-    //
-    // 'full' flavor  (assembleFullRelease):
-    //   app-full-arm64-v8a-release.apk    → modern ARM64 phones (recommended)
-    //   app-full-armeabi-v7a-release.apk  → older 32-bit ARM phones
-    //   app-full-x86_64-release.apk       → x86_64 emulators / Chromebooks
-    //   app-full-x86-release.apk          → legacy x86 emulators
-    //   app-full-universal-release.apk    → ALL 4 ABIs bundled (universal-all)
-    //
-    // 'phone' flavor (assemblePhoneRelease):
-    //   app-phone-arm64-v8a-release.apk   → arm64 only
-    //   app-phone-armeabi-v7a-release.apk → armeabi only
-    //   app-phone-universal-release.apk   → ARM-only universal (smaller, phone-focused)
     splits {
         abi {
             isEnable = true
@@ -123,8 +96,8 @@ android {
 }
 
 dependencies {
-    // libXray — Xray-core as in-process Go library (replaces xray binary)
-    implementation(files("libs/libXray.aar"))
+    // libbox — sing-box core as in-process Go library (replaces libXray)
+    implementation(files("libs/libbox.aar"))
 
     // Core Android
     implementation("androidx.core:core-ktx:1.12.0")
@@ -144,170 +117,72 @@ dependencies {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Download libXray.aar from GitHub Release assets.
+//  Download libbox.aar from a configurable URL.
+//  Run manually:  ./gradlew downloadLibboxAar
+//
+//  Config priority:
+//   1. Env var LIBBOX_AAR_URL
+//   2. gradle.properties: libboxAarUrl=https://...
+//   3. Default: placeholder (user must build or set URL)
 // ═══════════════════════════════════════════════════════════════
-val defaultLibXrayAarUrl = "https://github.com/jhopan/JhopanStoreVPN_Xray_APK/releases/download/binary-assets/libXray.aar"
+val defaultLibboxAarUrl = ""  // Set your URL here or in gradle.properties
 
-tasks.register("downloadLibXrayAar") {
-    description = "Download libXray.aar from GitHub releases into app/libs"
-    group = "xray"
+tasks.register("downloadLibboxAar") {
+    description = "Download libbox.aar into app/libs"
+    group = "singbox"
 
     val libsDir = file("libs")
-    val target = file("libs/libXray.aar")
+    val target = file("libs/libbox.aar")
 
     doLast {
         libsDir.mkdirs()
         if (target.exists() && target.length() > 0L) {
-            println("✓  libXray.aar already present (${target.length() / 1024} KB)")
+            println("✓  libbox.aar already present (${target.length() / 1024} KB)")
             return@doLast
         }
 
         val configuredUrl =
-            System.getenv("LIBXRAY_AAR_URL")
-                ?: (findProperty("libXrayAarUrl") as String?)
-                ?: defaultLibXrayAarUrl
+            System.getenv("LIBBOX_AAR_URL")
+                ?: (findProperty("libboxAarUrl") as String?)
+                ?: defaultLibboxAarUrl
 
-        println("⬇  Downloading libXray.aar from $configuredUrl …")
+        if (configuredUrl.isBlank()) {
+            throw GradleException(
+                """
+                |libbox.aar not found in app/libs.
+                |
+                |To build from source:
+                |  1. Run: bash build_libbox.sh
+                |  2. Or download a pre-built AAR and place it in app/libs/libbox.aar
+                |
+                |To auto-download, set one of:
+                |  - Env var: LIBBOX_AAR_URL=https://your-url/libbox.aar
+                |  - gradle.properties: libboxAarUrl=https://your-url/libbox.aar
+                """.trimMargin()
+            )
+        }
+
+        println("⬇  Downloading libbox.aar from $configuredUrl …")
 
         try {
             val connection = URL(configuredUrl).openConnection()
             connection.connectTimeout = 30_000
-            connection.readTimeout = 180_000
+            connection.readTimeout = 300_000
             connection.connect()
             connection.getInputStream().use { src ->
                 target.outputStream().use { dst -> src.copyTo(dst) }
             }
         } catch (e: Exception) {
             throw GradleException(
-                "Failed to download libXray.aar. Upload it once to a GitHub Release and set LIBXRAY_AAR_URL if needed.",
+                "Failed to download libbox.aar. Build from source with build_libbox.sh or set LIBBOX_AAR_URL.",
                 e
             )
         }
 
         if (!target.exists() || target.length() == 0L) {
-            throw GradleException("libXray.aar download produced an empty file")
+            throw GradleException("libbox.aar download produced an empty file")
         }
 
-        println("✓  libXray.aar saved (${target.length() / 1024} KB)")
+        println("✓  libbox.aar saved (${target.length() / 1024} KB)")
     }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Download tun2socks binary (bridges TUN ↔ SOCKS5 proxy).
-//  Run manually:  ./gradlew downloadTun2socks
-// ═══════════════════════════════════════════════════════════════
-val tun2socksVersion = "v2.6.0"
-
-tasks.register("downloadTun2socks") {
-    description = "Download tun2socks binary into jniLibs (prefer project release assets)"
-    group = "xray"
-
-    val jniLibsDir = file("src/main/jniLibs")
-
-    doLast {
-        mapOf(
-            "arm64-v8a" to "linux-arm64",
-            "armeabi-v7a" to "linux-armv7"
-        ).forEach { (abi, archName) ->
-            val dir = File(jniLibsDir, abi).also { it.mkdirs() }
-            val target = File(dir, "libtun2socks.so")
-
-            if (target.exists()) {
-                println("✓  tun2socks $abi already present (${target.length() / 1024} KB)")
-                return@forEach
-            }
-
-            val envVarName = if (abi == "arm64-v8a") "TUN2SOCKS_ARM64_URL" else "TUN2SOCKS_ARMV7_URL"
-            val overrideUrl =
-                System.getenv(envVarName)
-                    ?: (findProperty("tun2socks.${abi}.url") as String?)
-            val fallbackZipUrl = "https://github.com/xjasonlyu/tun2socks/releases/download/$tun2socksVersion/tun2socks-$archName.zip"
-
-            try {
-                val sourceUrl = overrideUrl ?: fallbackZipUrl
-                println("⬇  Downloading tun2socks $abi from $sourceUrl …")
-                val connection = URL(sourceUrl).openConnection()
-                connection.connectTimeout = 30_000
-                connection.readTimeout = 120_000
-                connection.connect()
-                if (overrideUrl != null) {
-                    connection.getInputStream().use { src ->
-                        target.outputStream().use { dst -> src.copyTo(dst) }
-                    }
-                    target.setExecutable(true)
-                    println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
-                } else {
-                    val tmp = File.createTempFile("tun2socks-$abi", ".zip")
-                    connection.getInputStream().use { src ->
-                        tmp.outputStream().use { dst -> src.copyTo(dst) }
-                    }
-
-                    var found = false
-                    ZipInputStream(tmp.inputStream()).use { zis ->
-                        var entry = zis.nextEntry
-                        while (entry != null) {
-                            if (!entry.isDirectory && entry.name.startsWith("tun2socks")) {
-                                target.outputStream().use { out -> zis.copyTo(out) }
-                                found = true
-                                break
-                            }
-                            entry = zis.nextEntry
-                        }
-                    }
-                    tmp.delete()
-
-                    if (found) {
-                        target.setExecutable(true)
-                        println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
-                    } else {
-                        println("✗  tun2socks binary not found in zip for $abi")
-                    }
-                }
-            } catch (e: Exception) {
-                println("✗  Primary source failed for $abi: ${e.message}")
-                println("⬇  Fallback to upstream tun2socks release: $fallbackZipUrl …")
-
-                try {
-                    val tmp = File.createTempFile("tun2socks-$abi", ".zip")
-                    val connection = URL(fallbackZipUrl).openConnection()
-                    connection.connectTimeout = 30_000
-                    connection.readTimeout = 120_000
-                    connection.connect()
-                    connection.getInputStream().use { src ->
-                        tmp.outputStream().use { dst -> src.copyTo(dst) }
-                    }
-
-                    var found = false
-                    ZipInputStream(tmp.inputStream()).use { zis ->
-                        var entry = zis.nextEntry
-                        while (entry != null) {
-                            if (!entry.isDirectory && entry.name.startsWith("tun2socks")) {
-                                target.outputStream().use { out -> zis.copyTo(out) }
-                                found = true
-                                break
-                            }
-                            entry = zis.nextEntry
-                        }
-                    }
-                    tmp.delete()
-
-                    if (found) {
-                        target.setExecutable(true)
-                        println("✓  tun2socks $abi saved (${target.length() / 1024} KB)")
-                    } else {
-                        println("✗  tun2socks binary not found in fallback zip for $abi")
-                    }
-                } catch (fallbackError: Exception) {
-                    println("✗  Failed to download tun2socks $abi: ${fallbackError.message}")
-                    println("   The app will try downloading at runtime instead.")
-                }
-            }
-        }
-    }
-}
-
-// Automatically download binary dependencies before build
-tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn("downloadLibXrayAar")
-    dependsOn("downloadTun2socks")
 }

@@ -10,7 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jhopanstore.vpn.core.VlessConfig
 import com.jhopanstore.vpn.core.VlessParser
-import com.jhopanstore.vpn.core.XrayManager
+import com.jhopanstore.vpn.core.SingboxManager
 import com.jhopanstore.vpn.service.JhopanVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import java.net.Inet4Address
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -29,28 +30,31 @@ import java.net.URL
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
-        // Compiled once — avoids per-call Regex instantiation in detectHotspotIp()
         private val HOTSPOT_IP_172_REGEX = Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*")
     }
 
     private val appContext = application.applicationContext
 
-    // Connection fields — address includes port, e.g. "example.com:443"
+    // ── Main Account ──
     var address by mutableStateOf("")
     var uuid by mutableStateOf("")
-
-    // Settings
     var path by mutableStateOf("/vless")
     var sni by mutableStateOf("")
     var host by mutableStateOf("")
+    var allowInsecure by mutableStateOf(true)
+
+    // ── DNS & Network ──
     var dns1 by mutableStateOf("8.8.8.8")
     var dns2 by mutableStateOf("8.8.4.4")
     var mtu by mutableStateOf("1400")
-    var allowInsecure by mutableStateOf(true)
-    var autoReconnect by mutableStateOf(true)
-    var autoPing by mutableStateOf(true)
+
+    // ── Ping ──
     var pingUrl by mutableStateOf("https://dns.google")
     var pingIntervalSeconds by mutableStateOf("5")
+    var autoPing by mutableStateOf(true)
+
+    // ── Behavior ──
+    var autoReconnect by mutableStateOf(true)
     var showUsageInApp by mutableStateOf(true)
     var showUsageInNotification by mutableStateOf(false)
     var showSpeedInNotification by mutableStateOf(false)
@@ -60,7 +64,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var maxReconnectAttempts by mutableStateOf("3")
     var networkReconnectDelaySeconds by mutableStateOf("2")
 
-    // State
+    // ── Backup Accounts (multiple) ──
+    data class BackupAccount(
+        val address: String = "",
+        val uuid: String = "",
+        val path: String = "/vless",
+        val sni: String = "",
+        val host: String = "",
+        val allowInsecure: Boolean = true,
+        val remark: String = ""
+    ) {
+        fun isValid(): Boolean = address.isNotBlank() && uuid.isNotBlank()
+
+        /** Build a VLESS URI from this backup account's fields. */
+        fun toVlessUri(): String {
+            val parts = address.trim().split(":")
+            val addr = parts.getOrElse(0) { address }
+            val port = parts.getOrElse(1) { "443" }.toIntOrNull() ?: 443
+            val actualSni = sni.ifEmpty { addr }
+            val actualHost = host.ifEmpty { addr }
+            return "vless://$uuid@$addr:$port?type=ws&security=tls&path=${
+                java.net.URLEncoder.encode(path, "UTF-8")
+            }&sni=$actualSni&host=$actualHost&allowInsecure=$allowInsecure#${
+                java.net.URLEncoder.encode(remark.ifEmpty { "Backup" }, "UTF-8")
+            }"
+        }
+    }
+
+    var backupAccounts by mutableStateOf(listOf<BackupAccount>())
+        private set
+
+    // ── Fallback / URL Test Settings ──
+    var fallbackEnabled by mutableStateOf(true)
+    var fallbackTestUrl by mutableStateOf("https://www.gstatic.com/generate_204")
+    var fallbackTestInterval by mutableStateOf("30")
+    var fallbackTolerance by mutableStateOf("100")
+
+    // ── Connection State ──
     var isConnected by mutableStateOf(false)
     var isConnecting by mutableStateOf(false)
     var statusText by mutableStateOf("Disconnected")
@@ -68,27 +108,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var downloadUsage by mutableStateOf("0 B")
     var uploadUsage by mutableStateOf("0 B")
 
-    // Flag untuk menandai sedang restart VPN (jangan reset proxy state)
     private var isRestarting = false
-
-    // Job reference so ping burst is cancellable on disconnect
     private var pingJob: Job? = null
     private var usageUiJob: Job? = null
-    // Safety timeout job — cancelled as soon as connection resolves (avoids 30s dangling coroutine)
     private var timeoutJob: Job? = null
     private var isAppInForeground = false
 
+    // ── Hotspot Sharing ──
+    var isHotspotDetected by mutableStateOf(false)
+    var hotspotIp by mutableStateOf("")
+    var isProxySharingActive by mutableStateOf(false)
+
     init {
-        // Collect StateFlow dari service — langsung update UI tanpa polling
         viewModelScope.launch {
             JhopanVpnService.state.collectLatest { state ->
                 when (state) {
                     JhopanVpnService.VpnState.CONNECTED -> {
-                        timeoutJob?.cancel()  // connection resolved — stop wasting 30s
+                        timeoutJob?.cancel()
                         isConnected = true
                         isConnecting = false
                         statusText = "Connected"
-                        isRestarting = false  // Reset flag setelah berhasil connect
+                        isRestarting = false
                         if (autoPing) startPingLoop() else pingResult = "Off"
                         startUsageUiLoop()
                     }
@@ -98,23 +138,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         statusText = "Connecting..."
                     }
                     JhopanVpnService.VpnState.FAILED -> {
-                        timeoutJob?.cancel()  // connection resolved — stop wasting 30s
+                        timeoutJob?.cancel()
                         isConnected = false
                         isConnecting = false
                         statusText = "Connection failed"
                         pingResult = "-"
                         downloadUsage = "0 B"
                         uploadUsage = "0 B"
-                        isRestarting = false  // Reset flag
-                        // Hanya reset proxy state jika BUKAN sedang restart
+                        isRestarting = false
                         if (!isRestarting) {
                             isProxySharingActive = false
-                            XrayManager.hotspotSharing = false
+                            SingboxManager.hotspotSharing = false
                         }
                     }
                     JhopanVpnService.VpnState.DISCONNECTED -> {
-                        // Hanya update jika memang sedang connected/connecting
-                        // Hindari reset state saat app baru buka (initial DISCONNECTED)
                         if (isConnected || isConnecting) {
                             isConnected = false
                             isConnecting = false
@@ -122,10 +159,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             pingResult = "-"
                             downloadUsage = "0 B"
                             uploadUsage = "0 B"
-                            // Jangan reset proxy state jika sedang restart VPN
                             if (!isRestarting) {
                                 isProxySharingActive = false
-                                XrayManager.hotspotSharing = false
+                                SingboxManager.hotspotSharing = false
                             }
                         }
                     }
@@ -134,19 +170,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Hotspot sharing state
-    var isHotspotDetected by mutableStateOf(false)
-    var hotspotIp by mutableStateOf("")
-    var isProxySharingActive by mutableStateOf(false)
+    // ── Address parsing ──
 
-    /** Split "host:port" input; defaults port to 443 */
     private fun parseAddress(): Pair<String, Int> {
         val trimmed = address.trim()
         val lastColon = trimmed.lastIndexOf(':')
         return if (lastColon > 0) {
-            val host = trimmed.substring(0, lastColon)
-            val port = trimmed.substring(lastColon + 1).toIntOrNull() ?: 443
-            Pair(host, port)
+            val h = trimmed.substring(0, lastColon)
+            val p = trimmed.substring(lastColon + 1).toIntOrNull() ?: 443
+            Pair(h, p)
         } else {
             Pair(trimmed, 443)
         }
@@ -160,6 +192,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             java.net.URLEncoder.encode(path, "UTF-8")
         }&sni=$actualSni&host=$actualHost&allowInsecure=$allowInsecure#JhopanStoreVPN"
     }
+
+    /** Build JSON array of backup VLESS URIs. */
+    private fun buildBackupUrisJson(): String {
+        val arr = JSONArray()
+        backupAccounts.filter { it.isValid() }.forEach { arr.put(it.toVlessUri()) }
+        return arr.toString()
+    }
+
+    // ── Import ──
 
     fun importVlessUri(uri: String) {
         val result = VlessParser.parse(uri)
@@ -176,33 +217,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Connect / Disconnect ──
+
     fun connect(context: Context) {
         if (address.isEmpty() || uuid.isEmpty()) {
             statusText = "Enter address and UUID"
             return
         }
 
-        // State CONNECTING akan diset oleh StateFlow collector saat service kirim sinyal
         isConnecting = true
         statusText = "Connecting..."
 
         val uri = buildVlessUri()
+        val backupUrisJson = buildBackupUrisJson()
+        val urlTestInterval = "${parseFallbackTestInterval()}s"
+        val urlTestTolerance = parseFallbackTolerance()
+
         JhopanVpnService.start(
             context,
             uri,
-            dns1,
-            dns2,
+            backupUrisJson,
+            dns1, dns2,
             parseMtu(),
             autoReconnect,
             showUsageInNotification,
             showSpeedInNotification,
             wakeLockEnabled,
             keepAliveEnabled,
-            parseKeepAliveIntervalSeconds(), parseMaxReconnectAttempts(), parseNetworkReconnectDelay())
+            parseKeepAliveIntervalSeconds(),
+            parseMaxReconnectAttempts(),
+            parseNetworkReconnectDelay(),
+            if (fallbackEnabled) fallbackTestUrl else "https://www.gstatic.com/generate_204",
+            urlTestInterval,
+            urlTestTolerance
+        )
 
-        // Safety timeout: jika service hang total (tidak emit state apapun),
-        // paksa reset setelah 30 detik agar field tidak terkunci selamanya.
-        // Stored as timeoutJob so it can be cancelled immediately when state resolves.
         timeoutJob?.cancel()
         timeoutJob = viewModelScope.launch {
             delay(30_000)
@@ -228,10 +277,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pingResult = "-"
         downloadUsage = "0 B"
         uploadUsage = "0 B"
-        // reset proxy sharing when VPN disconnects
         isProxySharingActive = false
-        XrayManager.hotspotSharing = false
+        SingboxManager.hotspotSharing = false
     }
+
+    // ── Backup Account Management ──
+
+    fun addBackupAccount(account: BackupAccount = BackupAccount()) {
+        backupAccounts = backupAccounts + account
+    }
+
+    fun removeBackupAccount(index: Int) {
+        if (index in backupAccounts.indices) {
+            backupAccounts = backupAccounts.toMutableList().apply { removeAt(index) }
+        }
+    }
+
+    fun updateBackupAccount(index: Int, account: BackupAccount) {
+        if (index in backupAccounts.indices) {
+            backupAccounts = backupAccounts.toMutableList().apply { set(index, account) }
+        }
+    }
+
+    fun importBackupFromUri(uri: String): Boolean {
+        val result = VlessParser.parse(uri)
+        return result.fold(
+            onSuccess = { cfg ->
+                val parts = "${cfg.address}:${cfg.port}"
+                addBackupAccount(BackupAccount(
+                    address = parts,
+                    uuid = cfg.uuid,
+                    path = cfg.path,
+                    sni = cfg.sni,
+                    host = cfg.host,
+                    allowInsecure = cfg.allowInsecure,
+                    remark = cfg.remark.ifEmpty { "Backup ${backupAccounts.size + 1}" }
+                ))
+                true
+            },
+            onFailure = { false }
+        )
+    }
+
+    // ── Settings toggles ──
 
     fun setAutoPingEnabled(enabled: Boolean) {
         autoPing = enabled
@@ -241,19 +329,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pingResult = "Off"
             return
         }
-
         pingResult = "-"
         if (isConnected) startPingLoop()
     }
 
     fun updateShowUsageInApp(enabled: Boolean) {
         showUsageInApp = enabled
-        if (!enabled) {
-            usageUiJob?.cancel()
-            usageUiJob = null
-        } else {
-            startUsageUiLoop()
-        }
+        if (!enabled) { usageUiJob?.cancel(); usageUiJob = null }
+        else startUsageUiLoop()
     }
 
     fun updateShowUsageInNotification(context: Context, enabled: Boolean) {
@@ -291,6 +374,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         JhopanVpnService.updateRuntimeSettings(context, wakeLockEnabled, keepAliveEnabled, parseKeepAliveIntervalSeconds(), parseMaxReconnectAttempts(), parseNetworkReconnectDelay())
     }
 
+    fun updatePingIntervalSeconds(input: String) {
+        pingIntervalSeconds = input.filter { it.isDigit() }.take(3)
+    }
+
     fun pushNotificationPreferences(context: Context) {
         JhopanVpnService.updateNotificationSettings(context, showUsageInNotification, showSpeedInNotification)
     }
@@ -299,9 +386,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         JhopanVpnService.updateRuntimeSettings(context, wakeLockEnabled, keepAliveEnabled, parseKeepAliveIntervalSeconds(), parseMaxReconnectAttempts(), parseNetworkReconnectDelay())
     }
 
-    fun updatePingIntervalSeconds(input: String) {
-        pingIntervalSeconds = input.filter { it.isDigit() }.take(3)
-    }
+    // ── App lifecycle ──
 
     fun onAppForegrounded() {
         isAppInForeground = true
@@ -314,19 +399,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         usageUiJob = null
     }
 
-    // --- Hotspot Sharing ---
+    // ── Hotspot Sharing ──
 
-    /** Cek apakah hotspot aktif berdasarkan NetworkInterface. Panggil dari onResume. */
     fun checkHotspot() {
         viewModelScope.launch(Dispatchers.IO) {
             val ip = detectHotspotIp()
             withContext(Dispatchers.Main) {
                 hotspotIp = ip ?: ""
                 isHotspotDetected = ip != null
-                // Kalau hotspot dimatikan saat proxy sharing aktif, reset
                 if (!isHotspotDetected && isProxySharingActive) {
                     isProxySharingActive = false
-                    XrayManager.hotspotSharing = false
+                    SingboxManager.hotspotSharing = false
                 }
             }
         }
@@ -338,50 +421,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             for (iface in interfaces) {
                 if (!iface.isUp || iface.isLoopback) continue
                 val name = iface.name.lowercase()
-                
-                // Skip interface yang PASTI BUKAN hotspot:
-                // - tun: VPN tunnel interface
-                // - rmnet/r_rmnet/ccmni: Data seluler interface (Qualcomm/Mediatek)
-                // - ppp: Point-to-point protocol
-                // - dummy: Virtual dummy interface
-                // - v4-/clat: IPv4/IPv6 translation layer
                 if (name.startsWith("tun") || name.startsWith("rmnet") ||
                     name.startsWith("ppp") || name.startsWith("dummy") ||
                     name.startsWith("v4-") || name.startsWith("clat") ||
                     name.startsWith("ccmni") || name.startsWith("r_rmnet")) continue
-                
+
                 for (addr in iface.inetAddresses.toList()) {
                     if (addr !is Inet4Address || addr.isLoopbackAddress) continue
                     val ip = addr.hostAddress ?: continue
-                    
-                    // Terima semua IP private range yang umum dipakai hotspot:
-                    // 192.168.x.x (paling umum untuk hotspot)
-                    // 10.x.x.x (beberapa device pakai range ini)
-                    // 172.16.x.x - 172.31.x.x (jarang tapi mungkin)
-                    val isPrivateRange = ip.startsWith("192.168.") || 
-                                        ip.startsWith("10.") ||
-                                        ip.matches(HOTSPOT_IP_172_REGEX)
-                    
-                    if (isPrivateRange) {
-                        // Return IP ASLI device, JANGAN ubah jadi .1!
-                        // Device hotspot Android ITU SENDIRI yang jadi gateway & proxy server
-                        // Device lain harus connect ke IP ini, bukan gateway .1
-                        return ip
-                    }
+                    val isPrivateRange = ip.startsWith("192.168.") ||
+                        ip.startsWith("10.") ||
+                        ip.matches(HOTSPOT_IP_172_REGEX)
+
+                    if (isPrivateRange) return ip
                 }
             }
             null
-        } catch (e: Exception) { 
+        } catch (e: Exception) {
             Log.e("MainViewModel", "Error detecting hotspot IP", e)
-            null 
+            null
         }
     }
 
-    /** Toggle proxy sharing on/off. Restart VPN dengan binding baru. */
     fun toggleProxySharing(context: Context) {
         if (!isConnected) return
         isProxySharingActive = !isProxySharingActive
-        XrayManager.hotspotSharing = isProxySharingActive
+        SingboxManager.hotspotSharing = isProxySharingActive
         Log.d("MainViewModel", "Toggle proxy sharing: $isProxySharingActive")
         restartVpn(context)
     }
@@ -395,19 +460,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             delay(1500)
             val uri = buildVlessUri()
+            val backupUrisJson = buildBackupUrisJson()
+            val urlTestInterval = "${parseFallbackTestInterval()}s"
+            val urlTestTolerance = parseFallbackTolerance()
+
             JhopanVpnService.start(
-                context,
-                uri,
-                dns1,
-                dns2,
-                parseMtu(),
-                autoReconnect,
-                showUsageInNotification,
-                showSpeedInNotification,
-                wakeLockEnabled,
-                keepAliveEnabled,
-                parseKeepAliveIntervalSeconds(), parseMaxReconnectAttempts(), parseNetworkReconnectDelay())
-            // Wait for a terminal state with no polling — StateFlow push, max 20s
+                context, uri, backupUrisJson,
+                dns1, dns2, parseMtu(),
+                autoReconnect, showUsageInNotification, showSpeedInNotification,
+                wakeLockEnabled, keepAliveEnabled,
+                parseKeepAliveIntervalSeconds(), parseMaxReconnectAttempts(), parseNetworkReconnectDelay(),
+                if (fallbackEnabled) fallbackTestUrl else "https://www.gstatic.com/generate_204",
+                urlTestInterval, urlTestTolerance
+            )
+
             val finalState = withTimeoutOrNull(20_000L) {
                 JhopanVpnService.state.first {
                     it == JhopanVpnService.VpnState.CONNECTED || it == JhopanVpnService.VpnState.FAILED
@@ -421,7 +487,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Persistence ---
+    // ── Persistence ──
 
     fun saveSettings(context: Context, immediate: Boolean = false) {
         val editor = context.getSharedPreferences("vpn_settings", Context.MODE_PRIVATE).edit()
@@ -446,9 +512,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString("keepAliveIntervalSeconds", keepAliveIntervalSeconds)
             .putString("maxReconnectAttempts", maxReconnectAttempts)
             .putString("networkReconnectDelaySeconds", networkReconnectDelaySeconds)
-        
-        // Use commit() untuk immediate save (synchronous) agar tidak hilang saat app di-kill
-        // Use apply() untuk background save (asynchronous) saat tidak urgent
+            // Backup accounts (JSON)
+            .putString("backupAccounts", serializeBackupAccounts())
+            // Fallback settings
+            .putBoolean("fallbackEnabled", fallbackEnabled)
+            .putString("fallbackTestUrl", fallbackTestUrl)
+            .putString("fallbackTestInterval", fallbackTestInterval)
+            .putString("fallbackTolerance", fallbackTolerance)
+
         if (immediate) {
             editor.commit()
             Log.d("MainViewModel", "Settings saved immediately (commit)")
@@ -481,16 +552,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         keepAliveIntervalSeconds = p.getString("keepAliveIntervalSeconds", "45") ?: "45"
         maxReconnectAttempts = p.getString("maxReconnectAttempts", "3") ?: "3"
         networkReconnectDelaySeconds = p.getString("networkReconnectDelaySeconds", "2") ?: "2"
+        // Backup accounts
+        val backupJson = p.getString("backupAccounts", "[]") ?: "[]"
+        backupAccounts = deserializeBackupAccounts(backupJson)
+        // Fallback
+        fallbackEnabled = p.getBoolean("fallbackEnabled", true)
+        fallbackTestUrl = p.getString("fallbackTestUrl", "https://www.gstatic.com/generate_204") ?: "https://www.gstatic.com/generate_204"
+        fallbackTestInterval = p.getString("fallbackTestInterval", "30") ?: "30"
+        fallbackTolerance = p.getString("fallbackTolerance", "100") ?: "100"
+
         if (!autoPing) pingResult = "Off"
     }
 
-    /** Sync isConnected dengan status service yang sebenarnya. Panggil dari onResume.
-     *  StateFlow sudah handle update real-time, ini hanya untuk kasus
-     *  app dibuka ulang saat VPN service masih jalan di background.
-     */
+    private fun serializeBackupAccounts(): String {
+        val arr = JSONArray()
+        backupAccounts.forEach { acc ->
+            arr.put(org.json.JSONObject().apply {
+                put("address", acc.address)
+                put("uuid", acc.uuid)
+                put("path", acc.path)
+                put("sni", acc.sni)
+                put("host", acc.host)
+                put("allowInsecure", acc.allowInsecure)
+                put("remark", acc.remark)
+            })
+        }
+        return arr.toString()
+    }
+
+    private fun deserializeBackupAccounts(json: String): List<BackupAccount> {
+        return try {
+            val arr = JSONArray(json)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                BackupAccount(
+                    address = obj.optString("address", ""),
+                    uuid = obj.optString("uuid", ""),
+                    path = obj.optString("path", "/vless"),
+                    sni = obj.optString("sni", ""),
+                    host = obj.optString("host", ""),
+                    allowInsecure = obj.optBoolean("allowInsecure", true),
+                    remark = obj.optString("remark", "")
+                )
+            }
+        } catch (e: Exception) {
+            Log.w("MainViewModel", "Failed to deserialize backup accounts: ${e.message}")
+            emptyList()
+        }
+    }
+
     fun syncConnectionState() {
         val running = JhopanVpnService.isRunning
-        // Hanya sync jika ada ketidaksesuaian dan TIDAK sedang dalam proses connecting
         if (running && !isConnected && !isConnecting) {
             isConnected = true
             isConnecting = false
@@ -498,7 +610,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (autoPing) startPingLoop() else pingResult = "Off"
             startUsageUiLoop()
         } else if (!running && isConnected) {
-            // Service mati tapi UI masih showing connected
             isConnected = false
             isConnecting = false
             statusText = "Disconnected"
@@ -506,23 +617,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             downloadUsage = "0 B"
             uploadUsage = "0 B"
             isProxySharingActive = false
-            XrayManager.hotspotSharing = false
+            SingboxManager.hotspotSharing = false
         }
-        // Jika isConnecting == true dan running == false: biarkan StateFlow yang handle
     }
 
-    // --- Ping ---
+    // ── Ping ──
 
     private fun startPingLoop() {
-        if (!autoPing) {
-            pingResult = "Off"
-            return
-        }
+        if (!autoPing) { pingResult = "Off"; return }
         pingJob?.cancel()
         pingResult = "..."
         val proxy = Proxy(
             Proxy.Type.SOCKS,
-            InetSocketAddress("127.0.0.1", com.jhopanstore.vpn.core.XrayManager.SOCKS_PORT)
+            InetSocketAddress("127.0.0.1", SingboxManager.SOCKS_PORT)
         )
         pingJob = viewModelScope.launch(Dispatchers.IO) {
             while (isConnected && autoPing) {
@@ -531,24 +638,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     conn.connectTimeout = 5000
                     conn.readTimeout = 5000
                     conn.requestMethod = "HEAD"
-
                     val start = System.currentTimeMillis()
                     conn.connect()
                     val code = conn.responseCode
                     val elapsed = System.currentTimeMillis() - start
-
-                    if (code in 200..399) {
-                        pingResult = "$elapsed ms"
-                    } else {
-                        pingResult = "HTTP $code"
-                    }
+                    pingResult = if (code in 200..399) "$elapsed ms" else "HTTP $code"
                 } catch (_: Exception) {
                     pingResult = "Timeout"
                 }
-
                 delay(parsePingIntervalMs())
             }
-            pingJob = null  // burst complete, free reference
+            pingJob = null
         }
     }
 
@@ -565,6 +665,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Helpers ──
+
     private fun parsePingIntervalMs(): Long {
         val seconds = pingIntervalSeconds.trim().toIntOrNull()?.coerceIn(1, 300) ?: 5
         return seconds * 1000L
@@ -577,26 +679,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return String.format("%.2f GB", value / (1024.0 * 1024.0 * 1024.0))
     }
 
-    private fun parseMtu(): Int {
-        val parsed = mtu.trim().toIntOrNull() ?: 1400
-        return parsed.coerceIn(1280, 1500)
-    }
-
-    fun parseMaxReconnectAttempts(): Int {
-        return maxReconnectAttempts.trim().toIntOrNull() ?: 3
-    }
-
-    fun parseNetworkReconnectDelay(): Int {
-        return networkReconnectDelaySeconds.trim().toIntOrNull() ?: 2
-    }
-
-    fun parseKeepAliveIntervalSeconds(): Int {
-        val parsed = keepAliveIntervalSeconds.trim().toIntOrNull() ?: 45
-        return parsed.coerceIn(20, 300)
-    }
+    private fun parseMtu(): Int = (mtu.trim().toIntOrNull() ?: 1400).coerceIn(1280, 1500)
+    fun parseMaxReconnectAttempts(): Int = maxReconnectAttempts.trim().toIntOrNull() ?: 3
+    fun parseNetworkReconnectDelay(): Int = networkReconnectDelaySeconds.trim().toIntOrNull() ?: 2
+    fun parseKeepAliveIntervalSeconds(): Int = (keepAliveIntervalSeconds.trim().toIntOrNull() ?: 45).coerceIn(20, 300)
+    private fun parseFallbackTestInterval(): Int = (fallbackTestInterval.trim().toIntOrNull() ?: 30).coerceIn(5, 300)
+    private fun parseFallbackTolerance(): Int = (fallbackTolerance.trim().toIntOrNull() ?: 100).coerceIn(0, 5000)
 }
-
-
-
-
-

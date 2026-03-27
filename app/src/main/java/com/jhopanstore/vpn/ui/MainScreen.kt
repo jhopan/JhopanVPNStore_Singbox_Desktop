@@ -231,6 +231,24 @@ private fun MainContent(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
 
+        // Backup accounts + fallback status indicator
+        if (viewModel.isConnected && viewModel.backupAccounts.any { it.isValid() }) {
+            Spacer(modifier = Modifier.height(6.dp))
+            val backupCount = viewModel.backupAccounts.count { it.isValid() }
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    text = "urltest: 1 main + $backupCount backup",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+
         if (viewModel.showUsageInApp) {
             Spacer(modifier = Modifier.height(12.dp))
 
