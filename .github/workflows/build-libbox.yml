@@ -12,7 +12,7 @@ on:
         default: 'v1.11.0'
 
 env:
-  GO_VERSION: '1.23.6'
+  GO_VERSION: '1.22.12'
   SINGBOX_VERSION: 'v1.11.0'
   GOTOOLCHAIN: local
   GOFLAGS: -gcflags=all=-l
@@ -48,8 +48,8 @@ jobs:
 
       - name: Install gomobile
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20231127183344-f6110fec4636
-          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20231127183344-f6110fec4636
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
       - name: Initialize gomobile

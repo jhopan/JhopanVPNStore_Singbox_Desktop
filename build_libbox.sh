@@ -32,9 +32,10 @@ echo "✓ Go: $(go version)"
 
 # Install gomobile
 echo "⬇ Installing gomobile..."
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20231127183344-f6110fec4636
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20231127183344-f6110fec4636
+go install golang.org/x/mobile/cmd/gomobile@latest
+go install golang.org/x/mobile/cmd/gobind@latest
 export PATH="$PATH:$(go env GOPATH)/bin"
+export GOFLAGS="-gcflags=all=-l"
 
 echo "⬇ Initializing gomobile..."
 gomobile init
