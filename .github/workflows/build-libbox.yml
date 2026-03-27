@@ -1,0 +1,118 @@
+name: Build libbox.aar
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      singbox_version:
+        description: 'Sing-box version tag (e.g. v1.11.0)'
+        required: false
+        default: 'v1.11.0'
+
+env:
+  GO_VERSION: '1.22.5'
+  SINGBOX_VERSION: 'v1.11.0'
+
+jobs:
+  build-libbox:
+    name: Build libbox.aar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          yes | sdkmanager --install "ndk;26.1.10909125" --channel=3 2>/dev/null || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Initialize gomobile
+        run: gomobile init
+
+      - name: Determine sing-box version
+        run: |
+          if [ "${{ github.event.inputs.singbox_version }}" != "" ]; then
+            echo "SINGBOX_VERSION=${{ github.event.inputs.singbox_version }}" >> $GITHUB_ENV
+          fi
+          echo "Building sing-box ${{ env.SINGBOX_VERSION }}"
+
+      - name: Clone sing-box
+        run: |
+          git clone --depth 1 --branch ${{ env.SINGBOX_VERSION }} https://github.com/SagerNet/sing-box.git singbox-src
+          echo "Sing-box source cloned"
+
+      - name: Build libbox.aar
+        working-directory: singbox-src
+        run: |
+          echo "========================================="
+          echo "  Building libbox.aar"
+          echo "  sing-box: ${{ env.SINGBOX_VERSION }}"
+          echo "  Go: $(go version)"
+          echo "  Target: android/arm64,android/arm"
+          echo "========================================="
+
+          gomobile bind \
+            -target=android/arm64,android/arm \
+            -javapkg=libbox \
+            -tags="with_quic,with_clash_api,with_utls,with_gvisor" \
+            -trimpath \
+            -ldflags="-s -w -X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
+            ./experimental/libbox
+
+          echo "========================================="
+          echo "Build complete!"
+          ls -lh libbox.aar
+          echo "========================================="
+
+      - name: Upload libbox.aar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-aar
+          path: singbox-src/libbox.aar
+          retention-days: 90
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "libbox.aar ${{ env.SINGBOX_VERSION }}"
+          body: |
+            ## libbox.aar (sing-box ${{ env.SINGBOX_VERSION }})
+
+            **Build info:**
+            - Go: ${{ env.GO_VERSION }}
+            - Targets: `android/arm64`, `android/arm`
+            - Tags: `with_quic, with_clash_api, with_utls, with_gvisor`
+
+            **Usage:**
+            1. Download `libbox.aar` below
+            2. Copy to `app/libs/libbox.aar`
+            3. Build APK: `./gradlew assemblePhoneDebug`
+          files: |
+            singbox-src/libbox.aar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
