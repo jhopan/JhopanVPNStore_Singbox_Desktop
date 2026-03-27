@@ -61,7 +61,7 @@ gomobile bind \
     -javapkg="${JAVA_PKG}" \
     -tags="${BUILD_TAGS}" \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}" \
     ./experimental/libbox
 
 # Copy to project

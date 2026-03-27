@@ -12,8 +12,10 @@ on:
         default: 'v1.11.0'
 
 env:
-  GO_VERSION: '1.23.0'
+  GO_VERSION: '1.23.6'
   SINGBOX_VERSION: 'v1.11.0'
+  GOTOOLCHAIN: local
+  GOFLAGS: -gcflags=all=-l
 
 jobs:
   build-libbox:
@@ -84,7 +86,7 @@ jobs:
             -javapkg=libbox \
             -tags="with_quic,with_clash_api,with_utls" \
             -trimpath \
-            -ldflags="-s -w -X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
+            -ldflags="-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
             ./experimental/libbox
 
           echo "========================================="
