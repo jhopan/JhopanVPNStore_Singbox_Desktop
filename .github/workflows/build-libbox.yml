@@ -85,12 +85,16 @@ jobs:
           go work init ./singbox-src ./golang-mobile
           cd singbox-src
           go mod download
+          # Diet: only with_utls (for TLS/Vless) and with_gvisor (for standard TUN). 
+          # Discard with_quic (removes Hysteria/TUIC/DoQ), with_clash_api, etc.
+          # Add -s -w to strip symbols and DWARF debug info for minimal binary size.
           gomobile bind \
             -target=android/arm64,android/arm \
             -androidapi 24 \
-            -javapkg=io.github.sagernet.libbox \
-            -tags="with_quic,with_clash_api,with_utls,with_gvisor" \
-            -ldflags="-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
+            -javapkg=io.github.sagernet \
+            -tags="with_utls,with_gvisor" \
+            -ldflags="-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }}" \
+            -trimpath \
             ./experimental/libbox
           echo "========================================="
           echo "Build complete!"

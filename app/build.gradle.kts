@@ -1,6 +1,6 @@
 import java.net.URL
 
-// libbox.aar (sing-box) replaces libXray.aar.
+// libbox.aar — sing-box core (in-process Go library)
 // Build libbox.aar from source using build_libbox.sh, or download a pre-built version.
 
 plugins {
@@ -34,7 +34,7 @@ android {
         create("full") {
             dimension = "target"
             ndk {
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
             }
         }
         create("phone") {
@@ -89,14 +89,14 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            include("arm64-v8a", "armeabi-v7a")
             isUniversalApk = true
         }
     }
 }
 
 dependencies {
-    // libbox — sing-box core as in-process Go library (replaces libXray)
+    // libbox — sing-box core as in-process Go library
     implementation(files("libs/libbox.aar"))
 
     // Core Android
