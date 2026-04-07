@@ -119,7 +119,7 @@ jobs:
             **Build info:**
             - Go: ${{ env.GO_VERSION }}
             - Targets: `android/arm64`, `android/arm`
-            - Tags: `with_quic, with_clash_api, with_utls, with_gvisor`
+            - Tags: `with_utls, with_gvisor (Diet Mode)`
 
             **Usage:**
             1. Download `libbox.aar` below
