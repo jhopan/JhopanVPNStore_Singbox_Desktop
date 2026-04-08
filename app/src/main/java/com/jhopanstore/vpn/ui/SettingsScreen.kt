@@ -1,3 +1,4 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
 package com.jhopanstore.vpn.ui
 
 import androidx.compose.foundation.Image
@@ -30,7 +31,6 @@ private val KEEP_ALIVE_INTERVAL_OPTIONS = listOf("20", "45", "60", "90", "120")
 private val MAX_RECONNECT_OPTIONS = listOf("3", "5", "10", "999")
 private val TOLERANCE_OPTIONS = listOf("50", "100", "200", "300", "500")
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
@@ -39,37 +39,92 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val tabs = listOf("Connection", "DNS", "Ping", "Rules", "Behavior")
+    var selectedTab by remember { mutableStateOf(0) }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Title
-        Text(
-            text = "Settings",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Header row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_logo),
+                contentDescription = "Logo",
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Settings",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onClose) {
+                Text("Close", fontSize = 14.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Tab row
+        TabRow(
+            selectedTabIndex = selectedTab,
             modifier = Modifier.fillMaxWidth()
-        )
+        ) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = selectedTab == index,
+                    onClick = { selectedTab = index },
+                    text = {
+                        Text(
+                            text = title,
+                            fontSize = 13.sp,
+                            fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                )
+            }
+        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Logo
-        Image(
-            painter = painterResource(id = R.drawable.ic_logo),
-            contentDescription = "Logo",
-            modifier = Modifier.size(100.dp)
-        )
+        // Tab content — each tab is independently scrollable
+        Box(modifier = Modifier.weight(1f)) {
+            when (selectedTab) {
+                0 -> ConnectionTab(viewModel, clipboardManager)
+                1 -> DnsTab(viewModel)
+                2 -> PingTab(viewModel, context)
+                3 -> RulesTab(viewModel)
+                4 -> BehaviorTab(viewModel, context)
+            }
+        }
+    }
+}
 
-        Spacer(modifier = Modifier.height(20.dp))
+// ══════════════════════════════════════════
+//  Tab 1: Connection
+// ══════════════════════════════════════════
 
-        // ═══════════════════════════════
-        //  Connection
-        // ═══════════════════════════════
-        SectionHeader("Connection")
+@Composable
+private fun ConnectionTab(
+    viewModel: MainViewModel,
+    clipboardManager: androidx.compose.ui.platform.ClipboardManager
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 16.dp)
+    ) {
+        SectionHeader("Main Connection")
 
         SettingRow("Path:") {
             OutlinedTextField(
@@ -77,7 +132,8 @@ fun SettingsScreen(
                 onValueChange = { viewModel.path = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                enabled = !viewModel.isConnected
+                enabled = !viewModel.isConnected,
+                placeholder = { Text("/vless  or  IP-port for Workers") }
             )
         }
 
@@ -101,11 +157,19 @@ fun SettingsScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Checkbox(
+                checked = viewModel.allowInsecure,
+                onCheckedChange = { viewModel.allowInsecure = it },
+                enabled = !viewModel.isConnected
+            )
+            Text("Allow Insecure TLS (skip verify)", fontSize = 13.sp)
+        }
 
-        // ═══════════════════════════════
-        //  Backup Accounts
-        // ═══════════════════════════════
+        Spacer(modifier = Modifier.height(12.dp))
         SectionHeader("Backup Accounts")
 
         if (viewModel.backupAccounts.isEmpty()) {
@@ -165,10 +229,6 @@ fun SettingsScreen(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-
-        // ═══════════════════════════════
-        //  Fallback / URL Test
-        // ═══════════════════════════════
         SectionHeader("Fallback / URL Test")
 
         CheckboxRow(
@@ -216,21 +276,22 @@ fun SettingsScreen(
                 }
             }
         }
-        Text(
-            text = "Akun utama tetap dipakai jika selisih latency ≤ tolerance. Makin besar nilai = makin setia ke akun utama.",
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 84.dp, top = 2.dp, bottom = 4.dp)
-        )
+    }
+}
 
-        Spacer(modifier = Modifier.height(12.dp))
+// ══════════════════════════════════════════
+//  Tab 2: DNS
+// ══════════════════════════════════════════
 
-        // ═══════════════════════════════
-        //  DNS
-        // ═══════════════════════════════
-        SectionHeader("DNS")
+@Composable
+private fun DnsTab(viewModel: MainViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 16.dp)
+    ) {
+        SectionHeader("DNS Servers")
 
         SettingRow("DNS 1:") {
             OutlinedTextField(
@@ -260,20 +321,53 @@ fun SettingsScreen(
             )
         }
 
-        Text(
-            text = "DNS otomatis pakai TCP jika akun terdeteksi sebagai Cloudflare Workers.",
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 84.dp, top = 2.dp)
-        )
+                .padding(top = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = "ℹ️  DNS otomatis pakai TCP jika akun terdeteksi sebagai Cloudflare Workers. Jika path adalah format IP-port (misal /103.6.207.108-8080), otomatis Workers.",
+                fontSize = 12.sp,
+                modifier = Modifier.padding(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                lineHeight = 16.sp
+            )
+        }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader("Network")
 
-        // ═══════════════════════════════
-        //  HTTP Ping
-        // ═══════════════════════════════
+        SettingRow("MTU:") {
+            OutlinedTextField(
+                value = viewModel.mtu,
+                onValueChange = { viewModel.mtu = it.filter { c -> c.isDigit() }.take(4) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !viewModel.isConnected,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                supportingText = { Text("1280–1500. Default: 1400", fontSize = 11.sp) }
+            )
+        }
+    }
+}
+
+// ══════════════════════════════════════════
+//  Tab 3: Ping
+// ══════════════════════════════════════════
+
+@Composable
+private fun PingTab(viewModel: MainViewModel, context: android.content.Context) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 16.dp)
+    ) {
         SectionHeader("HTTP Ping")
 
         SettingRow("Ping URL:") {
@@ -305,6 +399,9 @@ fun SettingsScreen(
             )
         }
 
+        Spacer(modifier = Modifier.height(20.dp))
+        SectionHeader("Reconnect")
+
         SettingRow("Net Delay:") {
             OutlinedTextField(
                 value = viewModel.networkReconnectDelaySeconds,
@@ -325,12 +422,44 @@ fun SettingsScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        SettingRow("Max Retry:") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MAX_RECONNECT_OPTIONS.forEach { option ->
+                    FilterChip(
+                        selected = viewModel.maxReconnectAttempts == option,
+                        onClick = { viewModel.updateMaxReconnectAttempts(context, option) },
+                        label = { Text(if (option == "999") "∞" else "${option}x", fontSize = 12.sp) }
+                    )
+                }
+            }
+        }
+        Text(
+            text = "Jumlah maksimal percobaan reconnect otomatis (∞ = tanpa batas).",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 84.dp, top = 2.dp)
+        )
+    }
+}
 
-        // ═══════════════════════════════
-        //  Behavior
-        // ═══════════════════════════════
-        SectionHeader("Behavior")
+// ══════════════════════════════════════════
+//  Tab 4: Behavior
+// ══════════════════════════════════════════
+
+@Composable
+private fun BehaviorTab(viewModel: MainViewModel, context: android.content.Context) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 16.dp)
+    ) {
+        SectionHeader("Connection Behavior")
 
         CheckboxRow(
             label = "Auto Reconnect",
@@ -346,6 +475,9 @@ fun SettingsScreen(
             checked = viewModel.autoPing,
             onCheckedChange = { viewModel.setAutoPingEnabled(it) }
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionHeader("Performance")
 
         CheckboxRow(
             label = "Wake Lock (Optimized)",
@@ -375,28 +507,8 @@ fun SettingsScreen(
             }
         }
 
-        SettingRow("Max Retry:") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                MAX_RECONNECT_OPTIONS.forEach { option ->
-                    FilterChip(
-                        selected = viewModel.maxReconnectAttempts == option,
-                        onClick = { viewModel.updateMaxReconnectAttempts(context, option) },
-                        label = { Text(if (option == "999") "∞" else "${option}x", fontSize = 12.sp) }
-                    )
-                }
-            }
-        }
-        Text(
-            text = "Jumlah maksimal percobaan reconnect otomatis (∞ = tanpa batas).",
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 84.dp, top = 2.dp)
-        )
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionHeader("Display")
 
         CheckboxRow(
             label = "Show Usage In App",
@@ -415,26 +527,244 @@ fun SettingsScreen(
             checked = viewModel.showSpeedInNotification,
             onCheckedChange = { viewModel.updateShowSpeedInNotification(context, it) }
         )
+    }
+}
 
-        CheckboxRow(
-            label = "Allow Insecure TLS (skip verify)",
-            checked = viewModel.allowInsecure,
-            onCheckedChange = { viewModel.allowInsecure = it },
-            enabled = !viewModel.isConnected
-        )
+// ══════════════════════════════════════════
+//  Tab 5: Rules
+// ══════════════════════════════════════════
 
-        Spacer(modifier = Modifier.height(28.dp))
+@Composable
+private fun RulesTab(viewModel: MainViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 16.dp)
+    ) {
+        SectionHeader("Custom Routing Rules")
 
-        // Close button
-        Button(
-            onClick = onClose,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.widthIn(min = 120.dp)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(8.dp)
         ) {
-            Text("Close")
+            Text(
+                text = "ℹ️  Rule otomatis di-download dari GitHub saat Anda klik Sync. " +
+                       "Pilih target rute untuk mengarahkan trafik (misal: Reject untuk blokir).",
+                fontSize = 12.sp,
+                modifier = Modifier.padding(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                lineHeight = 16.sp
+            )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        if (viewModel.customRules.isEmpty()) {
+            Text(
+                text = "Belum ada custom rule. Tambahkan rule baru.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+
+        viewModel.customRules.forEachIndexed { index, rule ->
+            CustomRuleCard(
+                index = index,
+                rule = rule,
+                viewModel = viewModel,
+                enabled = !viewModel.isConnected,
+                onUpdate = { updated -> viewModel.updateCustomRule(index, updated) },
+                onDelete = { viewModel.removeCustomRule(index) }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        OutlinedButton(
+            onClick = { viewModel.addCustomRule(MainViewModel.CustomRule("", "", "direct")) },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            shape = RoundedCornerShape(8.dp),
+            enabled = !viewModel.isConnected
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Tambah Rule", fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun CustomRuleCard(
+    index: Int,
+    rule: MainViewModel.CustomRule,
+    viewModel: MainViewModel,
+    enabled: Boolean,
+    onUpdate: (MainViewModel.CustomRule) -> Unit,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var syncStatus by remember { mutableStateOf("") }
+    
+    // Dynamically build targets
+    val targets = mutableListOf("direct", "reject", "main")
+    for (i in viewModel.backupAccounts.indices) {
+        targets.add("backup-$i")
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = rule.name.ifEmpty { "Rule ${index + 1}" },
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Text(
+                    text = "► ${rule.targetOutbound}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+
+                IconButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = "Expand",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = rule.name,
+                    onValueChange = { onUpdate(rule.copy(name = it.replace(" ", "_"))) },
+                    label = { Text("Nama Rule (tanpa spasi)", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                OutlinedTextField(
+                    value = rule.url,
+                    onValueChange = { onUpdate(rule.copy(url = it)) },
+                    label = { Text("URL GitHub (RAW JSON)", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text("Target Outbound:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                androidx.compose.foundation.lazy.LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(targets.size) { i ->
+                        val t = targets[i]
+                        FilterChip(
+                            selected = rule.targetOutbound == t,
+                            onClick = { onUpdate(rule.copy(targetOutbound = t)) },
+                            label = { Text(t, fontSize = 12.sp) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (rule.name.isNotBlank() && rule.url.isNotBlank()) {
+                                syncStatus = "Downloading..."
+                                viewModel.syncRuleFromGithub(
+                                    rule.name,
+                                    rule.url,
+                                    applyImmediately = false,
+                                    onSuccess = { msg -> syncStatus = "✅ $msg" },
+                                    onError = { err -> syncStatus = "❌ Gagal: $err" }
+                                )
+                            } else {
+                                syncStatus = "Isi nama & URL dulu."
+                            }
+                        },
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Text("Download", fontSize = 11.sp, maxLines = 1)
+                    }
+
+                    Button(
+                        onClick = {
+                            if (rule.name.isNotBlank() && rule.url.isNotBlank()) {
+                                syncStatus = "Syncing & Applying..."
+                                viewModel.syncRuleFromGithub(
+                                    rule.name,
+                                    rule.url,
+                                    applyImmediately = true,
+                                    onSuccess = { msg -> syncStatus = "✅ $msg" },
+                                    onError = { err -> syncStatus = "❌ Gagal: $err" }
+                                )
+                            } else {
+                                syncStatus = "Isi nama & URL dulu."
+                            }
+                        },
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Text("Sync & Apply", fontSize = 11.sp, maxLines = 1)
+                    }
+                }
+                
+                if (syncStatus.isNotBlank()) {
+                    Text(
+                        text = syncStatus, 
+                        fontSize = 11.sp, 
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -601,14 +931,17 @@ private fun isValidReconnectDelay(value: String): Boolean {
 @Composable
 private fun SectionHeader(title: String) {
     Text(
-        text = "\u2014 $title \u2014",
-        fontWeight = FontWeight.Bold,
-        fontSize = 14.sp,
-        textAlign = TextAlign.Center,
+        text = title,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        color = MaterialTheme.colorScheme.onSurface
+            .padding(top = 4.dp, bottom = 6.dp)
+    )
+    Divider(
+        modifier = Modifier.padding(bottom = 8.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
     )
 }
 
@@ -626,7 +959,7 @@ private fun SettingRow(
         Text(
             text = label,
             modifier = Modifier.width(76.dp),
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium
         )
         Spacer(modifier = Modifier.width(8.dp))
@@ -655,6 +988,6 @@ private fun CheckboxRow(
             enabled = enabled
         )
         Spacer(modifier = Modifier.width(4.dp))
-        Text(text = label, fontSize = 14.sp)
+        Text(text = label, fontSize = 13.sp)
     }
 }

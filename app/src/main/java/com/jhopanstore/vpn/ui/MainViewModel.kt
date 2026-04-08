@@ -140,7 +140,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isRestarting = false
                         if (autoPing) startPingLoop() else pingResult = "Off"
                         startUsageUiLoop()
-                        syncAllRulesInBackground()
+                        
+                        if (customRules.isNotEmpty() && hasMissingRules()) {
+                            statusText = "Syncing Rules..."
+                            viewModelScope.launch {
+                                // Small delay to let VPN establish baseline IP routing before background sync
+                                delay(3500)
+                                syncAllRulesInBackground()
+                            }
+                        } else {
+                            statusText = "Connected"
+                        }
                     }
                     JhopanVpnService.VpnState.CONNECTING -> {
                         isConnecting = true
@@ -352,74 +362,136 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun syncRuleFromGithub(name: String, urlString: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+    fun syncRuleFromGithub(name: String, urlString: String, applyImmediately: Boolean = false, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val rulesDir = java.io.File(appContext.filesDir, "rules")
                 if (!rulesDir.exists()) rulesDir.mkdirs()
-                
+                val file = java.io.File(rulesDir, "$name.json")
+
+                // "Download Only" mode: skip if file already exists
+                if (!applyImmediately && file.exists() && file.length() > 0) {
+                    withContext(Dispatchers.Main) { onSuccess("File sudah ada, skip download.") }
+                    return@launch
+                }
+
                 val url = URL(urlString)
                 val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
+                conn.connectTimeout = 30000
+                conn.readTimeout = 30000
                 conn.requestMethod = "GET"
-                
+                // Mimic a real browser to avoid GitHub rate-limiting / crawler blocks
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36")
+                conn.instanceFollowRedirects = true
+
                 if (conn.responseCode in 200..299) {
-                    val file = java.io.File(rulesDir, "$name.json")
                     conn.inputStream.use { input ->
                         java.io.FileOutputStream(file).use { output ->
                             input.copyTo(output)
                         }
                     }
-                    withContext(Dispatchers.Main) { onSuccess() }
+                    if (applyImmediately) {
+                        // Sync & Apply: trigger VPN restart to apply the new rule
+                        withContext(Dispatchers.Main) {
+                            onSuccess("Berhasil! Applying rules...")
+                            restartVpn(appContext)
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) { onSuccess("Berhasil di-download!") }
+                    }
                 } else {
                     withContext(Dispatchers.Main) { onError("HTTP ${conn.responseCode}") }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Network error") }
             }
+
         }
+    }
+
+    private fun hasMissingRules(): Boolean {
+        if (customRules.isEmpty()) return false
+        val rulesDir = java.io.File(appContext.filesDir, "rules")
+        for (rule in customRules) {
+            if (rule.url.isBlank()) continue
+            val file = java.io.File(rulesDir, "${rule.name}.json")
+            if (!file.exists() || file.length() == 0L) return true
+        }
+        return false
     }
 
     private var isSyncingRules = false
 
     private fun syncAllRulesInBackground() {
-        if (isSyncingRules || customRules.isEmpty()) return
+        if (isSyncingRules || customRules.isEmpty()) {
+            Log.d("MainViewModel", "Skip auto-sync: isSyncing=$isSyncingRules, rulesCount=${customRules.size}")
+            return
+        }
         isSyncingRules = true
         val rulesToSync = customRules
         viewModelScope.launch(Dispatchers.IO) {
             var anyChanges = false
             val rulesDir = java.io.File(appContext.filesDir, "rules")
             if (!rulesDir.exists()) rulesDir.mkdirs()
+            
+            Log.i("MainViewModel", "Starting auto-sync for ${rulesToSync.size} rules...")
+            
             for (rule in rulesToSync) {
                 if (rule.url.isBlank()) continue
                 val file = java.io.File(rulesDir, "${rule.name}.json")
-                if (file.exists()) continue // Download once, zero-quota friendly
                 
-                try {
-                    val url = URL(rule.url)
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = 5000
-                    conn.readTimeout = 5000
-                    if (conn.responseCode in 200..299) {
-                        conn.inputStream.use { input ->
-                            java.io.FileOutputStream(file).use { output ->
-                                input.copyTo(output)
+                // Only skip if file exists AND is not empty (valid-ish)
+                if (file.exists() && file.length() > 0) {
+                    Log.d("MainViewModel", "Rule '${rule.name}' already exists, skipping download.")
+                    continue
+                }
+                
+                var success = false
+                var attempts = 0
+                while (!success && attempts < 3) {
+                    try {
+                        Log.d("MainViewModel", "Downloading rule '${rule.name}' from ${rule.url} (Attempt ${attempts + 1})")
+                        val url = URL(rule.url)
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.connectTimeout = 30000
+                        conn.readTimeout = 30000
+                        conn.requestMethod = "GET"
+                        
+                        if (conn.responseCode in 200..299) {
+                            conn.inputStream.use { input ->
+                                java.io.FileOutputStream(file).use { output ->
+                                    input.copyTo(output)
+                                }
                             }
+                            Log.i("MainViewModel", "Successfully downloaded rule: ${rule.name}")
+                            anyChanges = true
+                            success = true
+                        } else {
+                            Log.w("MainViewModel", "Failed to download ${rule.name}: HTTP ${conn.responseCode}")
+                            attempts++
+                            delay(3000) // Wait 3s before retry
                         }
-                        anyChanges = true
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Auto-sync error for ${rule.name}: ${e.message}")
+                        attempts++
+                        delay(3000) // Android TUN network settling delay
                     }
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Auto-sync failed for ${rule.name}", e)
                 }
             }
             isSyncingRules = false
             
-            // Fast Refresh: Apply new routes immediately
+            // Fast Refresh: Apply new routes immediately if something was downloaded
             if (anyChanges) {
                 withContext(Dispatchers.Main) {
-                    Log.i("MainViewModel", "Rules downloaded automatically. Triggering Fast Refresh.")
+                    Log.i("MainViewModel", "New rules applied! Triggering Fast Refresh connection...")
                     restartVpn(appContext)
+                }
+            } else if (hasMissingRules()) {
+                // If we reach here and still have missing rules, it means attempts failed
+                withContext(Dispatchers.Main) {
+                    statusText = "Sync Rules Failed"
+                    delay(3000)
+                    if (JhopanVpnService.isRunning) statusText = "Connected"
                 }
             }
         }
@@ -748,10 +820,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (running && !isConnected && !isConnecting) {
             isConnected = true
             isConnecting = false
-            statusText = "Connected"
             if (autoPing) startPingLoop() else pingResult = "Off"
             startUsageUiLoop()
-            syncAllRulesInBackground()
+            
+            if (customRules.isNotEmpty() && hasMissingRules()) {
+                statusText = "Syncing Rules..."
+                viewModelScope.launch {
+                    delay(3500)
+                    syncAllRulesInBackground()
+                }
+            } else {
+                statusText = "Connected"
+            }
         } else if (!running && isConnected) {
             isConnected = false
             isConnecting = false
