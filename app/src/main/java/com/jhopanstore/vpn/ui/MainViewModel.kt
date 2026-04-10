@@ -98,7 +98,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     data class CustomRule(
         val name: String,
         val url: String,
-        val targetOutbound: String
+        val targetOutbound: String,
+        val fileName: String = "${name}.json"  // file name used for sing-box
     )
     var customRules by mutableStateOf(listOf<CustomRule>())
         private set
@@ -141,16 +142,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (autoPing) startPingLoop() else pingResult = "Off"
                         startUsageUiLoop()
                         
-                        if (customRules.isNotEmpty() && hasMissingRules()) {
-                            statusText = "Syncing Rules..."
-                            viewModelScope.launch {
-                                // Small delay to let VPN establish baseline IP routing before background sync
-                                delay(3500)
-                                syncAllRulesInBackground()
-                            }
-                        } else {
-                            statusText = "Connected"
-                        }
+                        // Manual rule import only - no auto-sync
+                        statusText = "Connected"
                     }
                     JhopanVpnService.VpnState.CONNECTING -> {
                         isConnecting = true
@@ -362,138 +355,133 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun syncRuleFromGithub(name: String, urlString: String, applyImmediately: Boolean = false, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+    // ── Manual Rule Import & Apply ──
+
+    fun importRuleFromFile(fileUri: android.net.Uri, ruleName: String, existingRuleIndex: Int = -1) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // 1. Read file dari user's selected URI
+                val inputStream = appContext.contentResolver.openInputStream(fileUri)
+                    ?: throw Exception("Cannot read file")
+                
+                val jsonText = inputStream.bufferedReader().readText()
+                inputStream.close()
+                
+                Log.i("MainViewModel", "Read rule file: $ruleName (${jsonText.length} bytes)")
+                
+                // 2. Validate JSON format
+                val ruleJson = org.json.JSONObject(jsonText)
+                if (!ruleJson.has("rules")) {
+                    throw Exception("Invalid rule format: missing 'rules' field")
+                }
+                
+                // 3. Create rules directory if not exists
                 val rulesDir = java.io.File(appContext.filesDir, "rules")
                 if (!rulesDir.exists()) rulesDir.mkdirs()
-                val file = java.io.File(rulesDir, "$name.json")
-
-                // "Download Only" mode: skip if file already exists
-                if (!applyImmediately && file.exists() && file.length() > 0) {
-                    withContext(Dispatchers.Main) { onSuccess("File sudah ada, skip download.") }
-                    return@launch
-                }
-
-                val url = URL(urlString)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 30000
-                conn.readTimeout = 30000
-                conn.requestMethod = "GET"
-                // Mimic a real browser to avoid GitHub rate-limiting / crawler blocks
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36")
-                conn.instanceFollowRedirects = true
-
-                if (conn.responseCode in 200..299) {
-                    conn.inputStream.use { input ->
-                        java.io.FileOutputStream(file).use { output ->
-                            input.copyTo(output)
+                
+                // 4. Save file to app's rules directory
+                val fileName = "${ruleName}.json"
+                val targetFile = java.io.File(rulesDir, fileName)
+                targetFile.writeText(jsonText)
+                
+                Log.i("MainViewModel", "Saved rule file: ${targetFile.absolutePath}")
+                
+                // 5. Add or update customRules list (but DO NOT apply yet)
+                withContext(Dispatchers.Main) {
+                    if (existingRuleIndex >= 0 && existingRuleIndex < customRules.size) {
+                        // Update existing rule
+                        val existing = customRules[existingRuleIndex]
+                        customRules = customRules.toMutableList().apply {
+                            set(existingRuleIndex, existing.copy(fileName = fileName))
                         }
-                    }
-                    if (applyImmediately) {
-                        // Sync & Apply: trigger VPN restart to apply the new rule
-                        withContext(Dispatchers.Main) {
-                            onSuccess("Berhasil! Applying rules...")
-                            restartVpn(appContext)
-                        }
+                        statusText = "Rule '$ruleName' updated! Click Apply to activate."
+                        Log.i("MainViewModel", "Rule updated at index $existingRuleIndex")
                     } else {
-                        withContext(Dispatchers.Main) { onSuccess("Berhasil di-download!") }
+                        // Add new rule
+                        customRules = customRules + CustomRule(
+                            name = ruleName,
+                            url = "(imported from file)",
+                            targetOutbound = "reject",  // default
+                            fileName = fileName
+                        )
+                        statusText = "Rule '$ruleName' imported! Click Apply to activate."
+                        Log.i("MainViewModel", "New rule added to list")
                     }
-                } else {
-                    withContext(Dispatchers.Main) { onError("HTTP ${conn.responseCode}") }
                 }
+                
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onError(e.message ?: "Network error") }
+                Log.e("MainViewModel", "Failed to import rule: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    statusText = "Import failed: ${e.message}"
+                }
             }
-
         }
     }
 
-    private fun hasMissingRules(): Boolean {
-        if (customRules.isEmpty()) return false
-        val rulesDir = java.io.File(appContext.filesDir, "rules")
-        for (rule in customRules) {
-            if (rule.url.isBlank()) continue
-            val file = java.io.File(rulesDir, "${rule.name}.json")
-            if (!file.exists() || file.length() == 0L) return true
-        }
-        return false
-    }
-
-    private var isSyncingRules = false
-
-    private fun syncAllRulesInBackground() {
-        if (isSyncingRules || customRules.isEmpty()) {
-            Log.d("MainViewModel", "Skip auto-sync: isSyncing=$isSyncingRules, rulesCount=${customRules.size}")
-            return
-        }
-        isSyncingRules = true
-        val rulesToSync = customRules
+    fun applyRule(ruleName: String, onSuccess: ((String) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            var anyChanges = false
-            val rulesDir = java.io.File(appContext.filesDir, "rules")
-            if (!rulesDir.exists()) rulesDir.mkdirs()
-            
-            Log.i("MainViewModel", "Starting auto-sync for ${rulesToSync.size} rules...")
-            
-            for (rule in rulesToSync) {
-                if (rule.url.isBlank()) continue
-                val file = java.io.File(rulesDir, "${rule.name}.json")
+            try {
+                Log.i("MainViewModel", "Applying rule: $ruleName")
                 
-                // Only skip if file exists AND is not empty (valid-ish)
-                if (file.exists() && file.length() > 0) {
-                    Log.d("MainViewModel", "Rule '${rule.name}' already exists, skipping download.")
-                    continue
+                // The rule file should already exist from importRuleFromFile
+                val rulesDir = java.io.File(appContext.filesDir, "rules")
+                val ruleFile = java.io.File(rulesDir, "${ruleName}.json")
+                
+                if (!ruleFile.exists()) {
+                    throw Exception("Rule file not found for: $ruleName")
                 }
                 
-                var success = false
-                var attempts = 0
-                while (!success && attempts < 3) {
-                    try {
-                        Log.d("MainViewModel", "Downloading rule '${rule.name}' from ${rule.url} (Attempt ${attempts + 1})")
-                        val url = URL(rule.url)
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.connectTimeout = 30000
-                        conn.readTimeout = 30000
-                        conn.requestMethod = "GET"
-                        
-                        if (conn.responseCode in 200..299) {
-                            conn.inputStream.use { input ->
-                                java.io.FileOutputStream(file).use { output ->
-                                    input.copyTo(output)
-                                }
-                            }
-                            Log.i("MainViewModel", "Successfully downloaded rule: ${rule.name}")
-                            anyChanges = true
-                            success = true
-                        } else {
-                            Log.w("MainViewModel", "Failed to download ${rule.name}: HTTP ${conn.responseCode}")
-                            attempts++
-                            delay(3000) // Wait 3s before retry
-                        }
-                    } catch (e: Exception) {
-                        Log.e("MainViewModel", "Auto-sync error for ${rule.name}: ${e.message}")
-                        attempts++
-                        delay(3000) // Android TUN network settling delay
-                    }
-                }
-            }
-            isSyncingRules = false
-            
-            // Fast Refresh: Apply new routes immediately if something was downloaded
-            if (anyChanges) {
+                Log.i("MainViewModel", "Rule file found: ${ruleFile.absolutePath}, ready to inject into sing-box")
+                
+                // Restart VPN to inject rule into sing-box config
                 withContext(Dispatchers.Main) {
-                    Log.i("MainViewModel", "New rules applied! Triggering Fast Refresh connection...")
+                    statusText = "Applying rule '$ruleName'..."
+                    Log.i("MainViewModel", "Triggering VPN restart to load rule...")
                     restartVpn(appContext)
+                    
+                    delay(2000)
+                    val msg = "Rule '$ruleName' applied! VPN reconnected."
+                    statusText = msg
+                    onSuccess?.invoke(msg)
                 }
-            } else if (hasMissingRules()) {
-                // If we reach here and still have missing rules, it means attempts failed
+                
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to apply rule: ${e.message}")
                 withContext(Dispatchers.Main) {
-                    statusText = "Sync Rules Failed"
-                    delay(3000)
-                    if (JhopanVpnService.isRunning) statusText = "Connected"
+                    statusText = "Failed to apply rule: ${e.message}"
                 }
             }
+        }
+    }
+
+    // ── Rule Management (Edit & Delete) ──
+
+    fun updateRuleTargetOutbound(ruleIndex: Int, newTargetOutbound: String) {
+        if (ruleIndex >= 0 && ruleIndex < customRules.size) {
+            val updated = customRules[ruleIndex].copy(targetOutbound = newTargetOutbound)
+            customRules = customRules.toMutableList().apply {
+                set(ruleIndex, updated)
+            }
+            Log.d("MainViewModel", "Rule '${updated.name}' target outbound updated to '$newTargetOutbound'")
+        }
+    }
+
+    fun deleteRule(ruleIndex: Int) {
+        if (ruleIndex >= 0 && ruleIndex < customRules.size) {
+            val rule = customRules[ruleIndex]
+            customRules = customRules.toMutableList().apply {
+                removeAt(ruleIndex)
+            }
+            
+            // Delete the rule file from storage
+            val rulesDir = java.io.File(appContext.filesDir, "rules")
+            val ruleFile = java.io.File(rulesDir, rule.fileName)
+            if (ruleFile.exists()) {
+                ruleFile.delete()
+                Log.d("MainViewModel", "Rule '${rule.name}' file deleted: ${ruleFile.absolutePath}")
+            }
+            
+            statusText = "Rule '${rule.name}' deleted"
         }
     }
 
@@ -793,6 +781,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 put("name", rule.name)
                 put("url", rule.url)
                 put("targetOutbound", rule.targetOutbound)
+                put("fileName", rule.fileName)
             })
         }
         return arr.toString()
@@ -806,7 +795,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 CustomRule(
                     name = obj.optString("name", ""),
                     url = obj.optString("url", ""),
-                    targetOutbound = obj.optString("targetOutbound", "direct")
+                    targetOutbound = obj.optString("targetOutbound", "direct"),
+                    fileName = obj.optString("fileName", "${obj.optString("name", "")}.json")
                 )
             }
         } catch (e: Exception) {
@@ -823,15 +813,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (autoPing) startPingLoop() else pingResult = "Off"
             startUsageUiLoop()
             
-            if (customRules.isNotEmpty() && hasMissingRules()) {
-                statusText = "Syncing Rules..."
-                viewModelScope.launch {
-                    delay(3500)
-                    syncAllRulesInBackground()
-                }
-            } else {
-                statusText = "Connected"
-            }
+            // Manual rule import only - no auto-sync
+            statusText = "Connected"
         } else if (!running && isConnected) {
             isConnected = false
             isConnecting = false

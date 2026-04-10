@@ -2,24 +2,36 @@
 
 # 🛡️ JhopanStoreVPN (Android)
 
-**Klien VPN Android Next-Gen Berbasis VLESS + Xray**
+**Klien VPN Android Next-Gen Berbasis VLESS + Sing-box**
 
 <p align="center">
   <img src="https://img.shields.io/badge/Android-24%2B-3DDC84?logo=android&logoColor=white" alt="Android API 24+"/>
   <img src="https://img.shields.io/badge/Kotlin-1.9.0-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin"/>
   <img src="https://img.shields.io/badge/Jetpack_Compose-UI-4285F4?logo=android&logoColor=white" alt="Jetpack Compose"/>
+  <img src="https://img.shields.io/badge/Sing_box-v1.11.0-009688?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQxIDAtOC0zLjU5LTgtOHMzLjU5LTggOC04IDggMy41OSA4IDgtMy41OSA4LTggOHptMy41LTljLjgzIDAgMS41LS42NyAxLjUtMS41cy0uNjctMS41LTEuNS0xLjUtMS41LjY3LTEuNSAxLjUuNjcgMS41IDEuNSAxLjV6Ii8+PC9zdmc+" alt="Sing-box v1.11.0"/>
   <img src="https://img.shields.io/github/v/release/jhopan/JhopanStoreVPN_Xray_APK?color=blue&label=Latest%20Release" alt="Release"/>
 </p>
 
-Dibangun dengan antarmuka **Jetpack Compose** murni, arsitektur *binary dependency* revolusioner, dan mengutamakan stabilitas koneksi tingkat tinggi di berbagai kondisi jaringan.
+Aplikasi VPN Android **full-featured** yang mengutamakan:
+
+- 🔥 **Performa maksimal** dengan core sing-box native (Go engine)
+- 🛡️ **Keamanan tingkat sistem** via TUN interface (tanpa proxy overhead)
+- ⚙️ **Kontrol penuh** atas routing & rule blocking (pornografi, malware, dll)
+- 🧬 **Arsitektur hemat daya** dengan zero background overhead
+- ✨ **UI/UX modern** pure Jetpack Compose
+
+Dirancang dengan antarmuka **Jetpack Compose** murni, arsitektur _binary dependency_ revolusioner, dan mengutamakan stabilitas koneksi tingkat tinggi di berbagai kondisi jaringan.
 
 ---
+
 </div>
 
 ## 📑 Daftar Isi
+
 - [🚀 Fitur Utama](#-fitur-utama)
 - [📦 Arsitektur Binary & Performa](#-arsitektur-binary--performa)
 - [🛠️ Cara Build Sendiri (Local)](#️-cara-build-sendiri-local)
+- [🧹 Cleanup Cache & Rebuild](#-cleanup-cache--rebuild)
 - [⚙️ Pengaturan URL Lanjutan](#️-pengaturan-url-lanjutan)
 - [🔄 CI/CD & Pipeline Release](#-cicd--pipeline-release)
 
@@ -30,23 +42,37 @@ Dibangun dengan antarmuka **Jetpack Compose** murni, arsitektur *binary dependen
 Aplikasi ini tidak sekadar VPN biasa; ini dirancang dengan berbagai fitur tingkat lanjut untuk memastikan **stabilitas, keamanan, dan kenyamanan maksimum** saat berselancar di internet:
 
 ### ⚡ Performa & Koneksi
-- **Core Xray Terintegrasi (VLESS)**: Ditenagai langsung oleh arsitektur Xray (via `libXray.aar`) untuk menyediakan koneksi protokol VLESS yang sangat responsif, ngebut, dan tangguh terhadap *Deep Packet Inspection* (DPI).
-- **Routing Cerdas Tanpa Root (tun2socks)**: Menggunakan engine `libtun2socks.so` secara efisien untuk menangkap dan merutekan seluruh lalu lintas aplikasi di sistem Android secara transparan. Tidak perlu akses *root*!
+
+- **Core Sing-box Native VLESS**: Ditenagai langsung oleh arsitektur sing-box v1.11.0 (via `libbox` Go native) untuk menyediakan koneksi protokol VLESS yang sangat responsif, cepat, dan tangguh terhadap _Deep Packet Inspection_ (DPI).
+- **TUN Interface Kernel**: Menggunakan kernel-level TUN interface untuk menangkap dan merutekan seluruh lalu lintas aplikasi di sistem Android secara transparan dan efisien. **Tidak perlu akses root!**
 
 ### 🔄 Sistem Pemulihan Otonom
+
 Mencegah pemutusan jaringan yang mengganggu akibat transisi sinyal (misalnya dari Wi-Fi ke Seluler):
+
 - **Auto-Reconnect Pintar**: Mekanisme koneksi ulang otomatis yang 100% bisa dikustomisasi.
 - **Max Retry Control**: Tentukan sendiri batasan maksimal sistem mencoba menghubungkan ulang.
-- **Delay Asinkron**: Sesuaikan jeda waktu (*Reconnect Delay*) antar percobaan ulang untuk menjaga baterai dan terhindar dari pemblokiran server akibat *spamming* koneksi saat *blank spot*.
+- **Delay Asinkron**: Sesuaikan jeda waktu (_Reconnect Delay_) antar percobaan ulang untuk menjaga baterai.
 
 ### 📡 Monitoring & Stabilitas
-- **Real-Time Ping Monitor**: Pantau selalu kualitas sambungan (latensi) secara *live* di layar. Ritme pengecekan (*Ping Interval*) dapat disetel sesuai keinginan.
+
+- **Real-Time Ping Monitor**: Pantau selalu kualitas sambungan (latensi) secara _live_ di layar.
+- **Live Usage Statistics**: Tampilkan statistik download/upload real-time di app dan notification.
 - **Stabilitas Background Prioritas Tertinggi**:
-  - **Foreground Service Elite**: Membungkus mesin VPN dalam layanan dengan *Notifikasi Status* persisten yang elegan. Sangat sulit `"di-kill"` oleh *task killer* bawaan Android.
-  - **Wake Lock (Opsional)**: Senjata rahasia agar koneksi server dan CPU Android Anda tidak terhenti (*stand-by*) saat layar dikunci, menjamin koneksi selalu aktif di latar belakang.
+  - **Foreground Service**: Membungkus mesin VPN dalam layanan dengan _Notifikasi Status_ persisten. Sangat sulit di-kill sistem.
+  - **Wake Lock (Opsional)**: Jaga koneksi tetap aktif saat layar dikunci.
+
+### 🚫 Custom Rule Management (BARU!)
+
+- **Manual Rule Import**: Import rule JSON dari GitHub (RouteRules/Rule files)
+- **Smart Rule Injection**: Rules auto-inject saat connect, tanpa perlu manual apply
+- **Flexible Routing**: Ubah target outbound (reject/direct/main/backup) kapan saja
+- **Edit & Update**: Re-import file untuk update rule tanpa delete
+- **Click-Apply Style**: Apply rule saat VPN running untuk instant effect
 
 ### 🎨 Desain Modern
-- **UI/UX Futuristik**: Antarmuka dibangun _from scratch_ menggunakan **Jetpack Compose**, menyuguhkan animasi yang mulus, respon sentuh seketika, dan kompatibilitas tata letak yang sempurna di semua ukuran layar.
+
+- **UI/UX Futuristik**: Antarmuka dibangun _from scratch_ menggunakan **Jetpack Compose**, menyuguhkan animasi yang mulus, respon sentuh seketika, dan kompatibilitas tata letak sempurna di semua ukuran layar.
 
 ---
 
@@ -55,17 +81,25 @@ Mencegah pemutusan jaringan yang mengganggu akibat transisi sinyal (misalnya dar
 Kami memahami bahwa ukuran repositori yang membengkak adalah mimpi buruk bagi developer. Oleh karena itu, JhopanStoreVPN menggunakan **Arsitektur Binary Ramping**:
 
 1. **Anti-Bloatware Repo**: File `.aar` dan `.so` berukuran raksasa tidak diunggah ke dalam repositori utama.
-2. **On-Demand Download**:
-   - `libXray.aar` diunduh otomatis secara dinamis dari GitHub Release tag `binary-assets`.
-   - `libtun2socks.so` diambil dari *upstream release* resmi setiap kali proses *build* awal berjalan.
+2. **On-Demand Download** (jika diperlukan):
+   - `libbox.aar` (sing-box go native) tersimpan di `app/libs/`
+   - Atau diunduh otomatis dari release yang dikonfigurasi
 3. **Build Varian Diferensiasi**:
-   - **`phone`**: Cepat dan ringan, dioptimalkan khusus untuk arsitektur modern ARM (v7a & v8a).
-   - **`full`**: Versi universal yang mencakup `x86_64` untuk emulasi dan kompatibilitas perangkat yang lebih luas.
+   - **`phone`**: Cepat dan ringan, dioptimalkan untuk ARM modern (v8a).
+   - **`full`**: Versi universal yang mencakup `x86_64` untuk emulasi dan kompatibilitas luas.
 
-Output *build* lokal akan otomatis dipilah sesuai foldernya:
+Output _build_ lokal akan otomatis dipilah sesuai foldernya:
+
 ```text
 app/build/outputs/apk/{varian}/release/app-{varian}-{arsitektur}-release.apk
 ```
+
+### Keunggulan Sing-box Native:
+
+✅ **Langsung Go Runtime** - Bukan JNI wrapper, langsung native binary  
+✅ **Hemat Daya** - Zero overhead, CPU efficiency maksimal  
+✅ **Kecepatan Tinggi** - Protocol handling murni di level kernel  
+✅ **Stable** - Production-grade v1.11.0
 
 ---
 
@@ -74,64 +108,183 @@ app/build/outputs/apk/{varian}/release/app-{varian}-{arsitektur}-release.apk
 Ingin nge-build dan memodifikasi proyek ini sendiri? Sangat mudah! Semuanya sudah diotomatisasi lewat skrip build Gradle.
 
 **💻 Persyaratan Awal:**
-- Koneksi internet stabil (sangat penting untuk mengunduh binary saat *build* pertama kali).
-- JDK 17 (direkomendasikan).
-- Android Studio / Command Line Tools bawaan Android terbaru.
+
+- Koneksi internet stabil
+- JDK 17+ (direkomendasikan)
+- Android Studio / Command Line Tools terbaru
 
 **Langkah-langkah Build:**
 
-1. Clone repositori ini dan masuk ke direktori `android/`.
-2. Buka terminal lalu eksekusi *Gradle Wrapper* berikut:
+1. Clone repositori ini:
 
 ```bash
-# Build khusus untuk perangkat HP nyata (rekomendasi)
-./gradlew assemblePhoneRelease
-
-# Build varian lengkap untuk Universal/Emulator
-./gradlew assembleFullRelease
+git clone https://github.com/jhopan/JhoVPN.git
+cd JhoVPN/android2
 ```
 
-> **✨ Keajaiban Terjadi di Balik Layar:** Task `preBuild` akan secara **otomatis** memicu proses unduhan library jaringan lewat modul `downloadLibXrayAar` & `downloadTun2socks`. Anda sama sekali tidak perlu mencari dan meletakkan file secara manual!
+2. Buka terminal lalu eksekusi _Gradle Wrapper_:
+
+```bash
+# Build untuk perangkat HP nyata (ARM 64-bit) — REKOMENDASI
+./gradlew.bat assemblePhoneRelease -x test
+
+# Atau build varian lengkap untuk Universal/Emulator
+./gradlew.bat assembleFullRelease -x test
+```
+
+3. APK siap di:
+
+```
+app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.apk
+```
+
+> **✨ Gradle Magic:** Semua dependency dan library akan di-download otomatis saat build pertama kali. Anda tidak perlu setup manual apapun!
 
 ---
 
-## ⚙️ Pengaturan URL Lanjutan
+## 🧹 Cleanup Cache & Rebuild
 
-Punya server aset *private* sendiri? Anda bisa mengganti secara leluasa dari mana unduhan file *binary* berasal dengan pengaturan *Environment Variables* atau melewati parameter bawaan Gradle:
+Repositori ini telah dibersihkan dari folder-folder cache besar yang tidak diperlukan untuk VCS (Version Control System).
 
-**Via Terminal (Environment):**
-```bash
-set LIBXRAY_AAR_URL=https://github.com/<owner>/<repo>/.../libXray.aar
-set TUN2SOCKS_ARM64_URL=https://github.com/<owner>/<repo>/.../libtun2socks-arm64-v8a.so
-set TUN2SOCKS_ARMV7_URL=https://github.com/<owner>/<repo>/.../libtun2socks-armeabi-v7a.so
+**Folder yang dihapus:**
 
-./gradlew assemblePhoneRelease
+```
+❌ .gradle/         → Gradle dependency cache (~200MB+)
+❌ .idea/            → Android Studio IDE cache (~50MB+)
+❌ app/build/        → Build artifacts & intermediate files (~500MB+)
+❌ app/.cxx/         → CMake/NDK cache (~100MB+)
 ```
 
-**Via Baris Perintah Gradle Arguments:**
+**Mengapa aman untuk dihapus?**
+
+- ✅ **BUKAN source code** — Semua file `.kt`, `.java`, `res/`, `src/` tetap aman
+- ✅ **BUKAN library penting** — `app/libs/libbox.aar` tetap ada
+- ✅ **Regenerate otomatis** — Gradle akan otomatis membuat ulang saat build
+- ✅ **Menghemat GB space** — Total ukuran folder berkurang drastis
+
+**Dapat dikembalikan? YA, tapi tidak perlu!**
+
+Folder-folder cache dapat dikembalikan dengan REBUILD LOCAL. Desktop Anda tidak perlu menyimpan megabytes garbage yang bisa dibuat ulang dalam hitungan menit.
+
+**Rebuild After Cleanup (Local):**
+
 ```bash
-./gradlew assemblePhoneRelease -PlibXrayAarUrl=https://... -Ptun2socks.arm64-v8a.url=https://... -Ptun2socks.armeabi-v7a.url=https://...
+# Navigate ke project root
+cd c:\Users\ACER\Documents\Project\Aplikasi\JhoVPN\android2
+
+# Rebuild untuk perangkat real (ARM 64-bit)
+.\gradlew.bat assemblePhoneRelease -x test
+
+# Atau rebuild full untuk emulator/universal
+.\gradlew.bat assembleFullRelease -x test
+```
+
+**APK Output Location:**
+
+```
+app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.apk
+```
+
+**Install ke device:**
+
+```bash
+adb install -r "app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.apk"
+```
+
+> **⏱️ Durasi Build:**
+>
+> - First build: **2-3 menit** (download library)
+> - Subsequent builds: **1-2 menit** (cache ada)
+
+---
+
+## ⚙️ Pengaturan URL Lanjutan (Opsional)
+
+Punya server aset _private_ sendiri? Anda bisa menyesuaikan dari mana unduhan file _binary_ berasal dengan _Environment Variables_:
+
+**Via Terminal (Environment):**
+
+```bash
+set LIBBOX_AAR_URL=https://github.com/<owner>/<repo>/.../libbox.aar
+
+./gradlew.bat assemblePhoneRelease
 ```
 
 ---
 
 ## 🔄 CI/CD & Pipeline Release
 
-Proyek ini telah dibekali dengan alur kerja *GitHub Actions* (`.github/workflows/build.yaml`) untuk integrasi otomatis tanpa campur tangan teknis tinggi.
+Proyek ini telah dilengkapi dengan GitHub Actions workflow untuk build dan release otomatis.
 
-**🛠 Alur Kerja CI (Continuous Integration):**
-1. Setiap proses *push* (*commit*) akan menjalankan linting, validasi, serta proses *build multi-ABI*.
-2. Secara otomatis menghasilkan *Artifact* instalasi dengan label elegan: `JhopanStoreVPN-*.apk`.
+**Alur Kerja Otomatis:**
 
-**📦 Otomasi Rilis Publik:**
-1. Anda cukup menekan tombol "*Draft a new release*" dan mencetak Tag berinisial huruf `v` (sebagai contoh: `v1.0.0`).
-2. Bot _GitHub Workflow_ akan mengambil alih kemudian merilis file APK siap pakai di tab Releases sekaligus mengunggah kembali `JhopanStoreVPN-libXray.aar`.
-
-**♻️ Teknik Mutakhir: Pembaruan Satu Kali Upload**
-Jika sewaktu-waktu ada rilis versi dari modul *core* (seperti update mesin protokol Xray / tun2socks), Anda **hanya perlu menimpa (replace)** versi rilis yang tersemat pada *tag* `binary-assets`. 
-Kemudian, seluruh skema *Build* di lokal Anda dan tahapan pipeline (CI/CD) akan **otomatis menarik berkas dengan versi terbaru tadi**! Ini memangkas habis keharusan repot-repot *commit* file raksasa ke riwayat git log proyek utama!
+1. Setiap _push_ akan menjalankan build validation
+2. Tag release (v*.*.\* ) akan otomatis menghasilkan APK siap pakai
+3. File APK tersedia di GitHub Releases
 
 ---
-<div align="center">
-  Dibuat dengan ❤️ untuk memastikan kebebasan dan ketangguhan berselancar internet.
-</div>
+
+## 📋 APP SPECS
+
+| Aspek           | Detail                           |
+| --------------- | -------------------------------- |
+| **Engine**      | Sing-box v1.11.0 (native Go)     |
+| **Protocol**    | VLESS (WebSocket + TLS)          |
+| **Routing**     | Kernel TUN Interface             |
+| **Min Android** | API 24+ (Android 7.0+)           |
+| **App Size**    | ~23-25 MB                        |
+| **Battery**     | ✅ Hemat (native engine)         |
+| **Permission**  | VPN service only, no root needed |
+| **UI**          | 100% Jetpack Compose             |
+
+---
+
+## 🎯 Use Cases
+
+**1. Privacy & Security**
+
+```
+User → JhoVPN → sing-box → VLESS server
+              ↓
+        (TUN encryption)
+              ↓
+        Internet (safe)
+```
+
+**2. Content Blocking (Rules)**
+
+```
+Req: pornhub.com → Matched rule → REJECT
+Req: google.com  → No rule     → DIRECT
+```
+
+**3. Smart Failover**
+
+```
+Primary server down → Auto-detect (ping test)
+                   → Switch to backup instantly
+                   → No app restart needed
+```
+
+---
+
+## 📱 Screenshots & Features
+
+- **Main Screen**: Connect/Disconnect + Live Ping + Data Usage
+- **Settings**: DNS, MTU, Auto-reconnect, Keep-alive options
+- **Rules Tab**: Import custom rules, manage routing targets
+- **Backup Accounts**: Multiple server support with auto-failover
+
+---
+
+## 🤝 Kontribusi
+
+Bug reports, feature requests, dan PR sangat diterima!
+
+Untuk development guidelines: Lihat `BUILD_FROM_BACKUP.md`
+
+---
+
+## 📄 License
+
+Dibuat dengan ❤️ untuk kebebasan dan keamanan online.

@@ -16,7 +16,7 @@ set -e
 SINGBOX_VERSION="v1.11.0"
 OUTPUT_DIR="app/libs"
 TARGETS="android/arm64,android/arm"
-JAVA_PKG="io.github.sagernet.libbox"
+JAVA_PKG="io.github.sagernet"
 BUILD_TAGS="with_quic,with_clash_api,with_utls,with_gvisor"
 
 echo "═══════════════════════════════════════════"

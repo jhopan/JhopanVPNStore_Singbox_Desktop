@@ -36,17 +36,22 @@ import io.github.sagernet.libbox.Libbox
 import io.github.sagernet.libbox.PlatformInterface
 import io.github.sagernet.libbox.SetupOptions
 import io.github.sagernet.libbox.TunOptions
+import io.github.sagernet.libbox.BoxService
+
+import io.github.sagernet.libbox.InterfaceUpdateListener
+import io.github.sagernet.libbox.NetworkInterfaceIterator
+import io.github.sagernet.libbox.WIFIState
+import io.github.sagernet.libbox.SystemProxyStatus
 import java.io.IOException
 
 /**
  * Android VpnService that routes traffic through sing-box core (via libbox).
  *
- * Architecture (simplified from previous Xray + tun2socks):
+ * Architecture:
  *   Apps → sing-box (TUN built-in + urltest) → internet
  *
- * Key improvements:
+ * Key design:
  *   - All-in-one: sing-box handles TUN, proxy, DNS internally
- *   - No tun2socks binary, no JNI fork helper
  *   - urltest outbound group: automatic failover, zero-restart
  *   - PlatformInterface: VPN socket protection + TUN management
  */
@@ -77,6 +82,7 @@ class JhopanVpnService : VpnService() {
         const val EXTRA_URLTEST_URL = "urltest_url"
         const val EXTRA_URLTEST_INTERVAL = "urltest_interval"
         const val EXTRA_URLTEST_TOLERANCE = "urltest_tolerance"
+        const val EXTRA_CUSTOM_RULES = "custom_rules"
         private var maxReconnectAttempts = 3
         private var networkReconnectDelaySeconds = 2
         private const val DEFAULT_MTU = 1400
@@ -153,7 +159,8 @@ class JhopanVpnService : VpnService() {
             reconnectDelay: Int,
             urlTestUrl: String,
             urlTestInterval: String,
-            urlTestTolerance: Int
+            urlTestTolerance: Int,
+            customRulesJson: String
         ) {
             val intent = Intent(context, JhopanVpnService::class.java).apply {
                 putExtra(EXTRA_VLESS_URI, vlessUri)
@@ -172,6 +179,7 @@ class JhopanVpnService : VpnService() {
                 putExtra(EXTRA_URLTEST_URL, urlTestUrl)
                 putExtra(EXTRA_URLTEST_INTERVAL, urlTestInterval)
                 putExtra(EXTRA_URLTEST_TOLERANCE, urlTestTolerance)
+                putExtra(EXTRA_CUSTOM_RULES, customRulesJson)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -221,6 +229,7 @@ class JhopanVpnService : VpnService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var commandServer: CommandServer? = null
+    private var boxService: BoxService? = null
     private var tunFd: ParcelFileDescriptor? = null
     private var reconnectWakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -245,6 +254,7 @@ class JhopanVpnService : VpnService() {
     private var lastUrlTestUrl: String = "https://www.gstatic.com/generate_204"
     private var lastUrlTestInterval: String = "30s"
     private var lastUrlTestTolerance: Int = 100
+    private var lastCustomRulesJson: String = "[]"
     private var autoReconnect = false
     private var reconnectAttempts = 0
 
@@ -270,7 +280,7 @@ class JhopanVpnService : VpnService() {
                 if (inet4Addr != null && inet4Addr.hasNext()) {
                     while (inet4Addr.hasNext()) {
                         val prefix = inet4Addr.next()
-                        builder.addAddress(prefix.address(), prefix.mask())
+                        builder.addAddress(prefix.address(), prefix.prefix())
                     }
                 } else {
                     builder.addAddress("172.19.0.1", 30)
@@ -287,7 +297,7 @@ class JhopanVpnService : VpnService() {
             builder.addDnsServer(lastDns1.ifBlank { "8.8.8.8" })
             builder.addDnsServer(lastDns2.ifBlank { "8.8.4.4" })
 
-            // Exclude our own app
+            // Exclude our own app to prevent VPN routing loops
             try {
                 builder.addDisallowedApplication(packageName)
             } catch (_: Exception) {}
@@ -304,14 +314,9 @@ class JhopanVpnService : VpnService() {
         }
 
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-        override fun autoDetectControl(fd: Int) { protect(fd) }
-        override fun findProcessInfo(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): io.github.sagernet.libbox.ProcessInfo? = null
+        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): Int = 0
         override fun packageNameByUid(uid: Int): String = ""
         override fun uidByPackageName(packageName: String): Int = 0
-        override fun usePlatformDefaultInterfaceMonitor(): Boolean = true
-        override fun startDefaultInterfaceMonitor(listener: io.github.sagernet.libbox.InterfaceUpdateListener) {}
-        override fun closeDefaultInterfaceMonitor(listener: io.github.sagernet.libbox.InterfaceUpdateListener) {}
-        override fun usePlatformInterfaceGetter(): Boolean = false
         override fun getInterfaces(): io.github.sagernet.libbox.NetworkInterfaceIterator? = null
         override fun underNetworkExtension(): Boolean = false
         override fun includeAllNetworks(): Boolean = false
@@ -319,27 +324,17 @@ class JhopanVpnService : VpnService() {
         override fun clearDNSCache() {}
         override fun useProcFS(): Boolean = false
         override fun writeLog(message: String) { Log.d(TAG, message) }
-        override fun postNotification(notification: io.github.sagernet.libbox.Notification) {}
+        override fun sendNotification(notification: io.github.sagernet.libbox.Notification) {}
+        override fun startDefaultInterfaceMonitor(listener: io.github.sagernet.libbox.InterfaceUpdateListener) {}
+        override fun closeDefaultInterfaceMonitor(listener: io.github.sagernet.libbox.InterfaceUpdateListener) {}
     }
 
     // ── CommandServerHandler ──────────────────────────────────────
     // Lifecycle callbacks from sing-box
 
     private val serverHandler = object : CommandServerHandler {
-        override fun serviceStarted() {
-            Log.i(TAG, "sing-box service started")
-            isRunning = true
-            SingboxManager.markRunning()
-            _state.value = VpnState.CONNECTED
-            reconnectAttempts = 0
-        }
-
         override fun serviceReload() {
             Log.i(TAG, "sing-box service reloading")
-        }
-
-        override fun serviceClose(message: String?) {
-            Log.i(TAG, "sing-box service closing: $message")
         }
 
         override fun postServiceClose() {
@@ -372,9 +367,7 @@ class JhopanVpnService : VpnService() {
 
         // Create CommandServer
         try {
-            commandServer = CommandServer(serverHandler, platformInterface)
-            commandServer?.start()
-            Log.i(TAG, "CommandServer started")
+            commandServer = CommandServer(serverHandler, 31337)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create CommandServer", e)
         }
@@ -443,6 +436,7 @@ class JhopanVpnService : VpnService() {
         val urlTestUrl = intent.getStringExtra(EXTRA_URLTEST_URL) ?: "https://www.gstatic.com/generate_204"
         val urlTestInterval = intent.getStringExtra(EXTRA_URLTEST_INTERVAL) ?: "30s"
         val urlTestTolerance = intent.getIntExtra(EXTRA_URLTEST_TOLERANCE, 100)
+        val customRulesJson = intent.getStringExtra(EXTRA_CUSTOM_RULES) ?: "[]"
 
         isStopping = false
         _state.value = VpnState.CONNECTING
@@ -450,7 +444,7 @@ class JhopanVpnService : VpnService() {
         startForeground(NOTIFICATION_ID, buildNotification("Connecting..."))
 
         serviceScope.launch {
-            connect(vlessUri, backupUris, dns1, dns2, mtu, urlTestUrl, urlTestInterval, urlTestTolerance)
+            connect(vlessUri, backupUris, dns1, dns2, mtu, urlTestUrl, urlTestInterval, urlTestTolerance, customRulesJson)
         }
 
         return START_STICKY
@@ -464,7 +458,8 @@ class JhopanVpnService : VpnService() {
         mtu: Int,
         urlTestUrl: String,
         urlTestInterval: String,
-        urlTestTolerance: Int
+        urlTestTolerance: Int,
+        customRulesJson: String
     ) {
         try {
             // Save for reconnection
@@ -476,6 +471,7 @@ class JhopanVpnService : VpnService() {
             lastUrlTestUrl = urlTestUrl
             lastUrlTestInterval = urlTestInterval
             lastUrlTestTolerance = urlTestTolerance
+            lastCustomRulesJson = customRulesJson
             reconnectAttempts = 0
 
             if (isStopping) return
@@ -553,17 +549,37 @@ class JhopanVpnService : VpnService() {
                                     SingboxManager.resolveDomain(c.address)?.let { reResolved[c.address] = it }
                                 }
 
+                                val customRulesList = mutableListOf<Map<String, String>>()
+                                try {
+                                    val rulesArr = org.json.JSONArray(lastCustomRulesJson)
+                                    for (i in 0 until rulesArr.length()) {
+                                        val obj = rulesArr.getJSONObject(i)
+                                        customRulesList.add(
+                                            mapOf(
+                                                "name" to obj.optString("name", ""),
+                                                "fileName" to obj.optString("fileName", "${obj.optString("name", "")}.json"),
+                                                "targetOutbound" to obj.optString("targetOutbound", "direct")
+                                            )
+                                        )
+                                    }
+                                } catch (_: Exception) {}
+
                                 val configJson = SingboxManager.buildConfig(
-                                    reAccounts, lastDns1, lastDns2, reResolved,
-                                    lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance, lastMtu
+                                    reAccounts, filesDir.absolutePath, lastDns1, lastDns2, reResolved,
+                                    lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance, lastMtu,
+                                    customRulesList
                                 )
 
                                 try {
-                                    commandServer?.startOrReloadService(configJson, null)
+                                    boxService?.close()
+                                    boxService = Libbox.newService(configJson, platformInterface)
+                                    boxService?.start()
+                                    commandServer?.setService(boxService)
+                                    commandServer?.start()
+                                    
                                     delay(2000)  // Give sing-box time to start
-                                    if (SingboxManager.isRunning()) {
-                                        success = true
-                                    }
+                                    SingboxManager.markRunning()
+                                    success = true
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Reconnect failed: ${e.message}")
                                 }
@@ -596,11 +612,28 @@ class JhopanVpnService : VpnService() {
 
             // Build sing-box config
             if (isStopping) return
-            updateNotification("Building config...")
+            val customRulesList = mutableListOf<Map<String, String>>()
+            try {
+                val rulesArr = org.json.JSONArray(customRulesJson)
+                for (i in 0 until rulesArr.length()) {
+                    val obj = rulesArr.getJSONObject(i)
+                    customRulesList.add(
+                        mapOf(
+                            "name" to obj.optString("name", ""),
+                            "fileName" to obj.optString("fileName", "${obj.optString("name", "")}.json"),
+                            "targetOutbound" to obj.optString("targetOutbound", "direct")
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse custom rules: ${e.message}")
+            }
 
+            Log.i(TAG, "Configuring sing-box with ${allAccounts.size} account(s)")
             val configJson = SingboxManager.buildConfig(
-                allAccounts, dns1, dns2, resolvedIps,
-                urlTestUrl, urlTestInterval, urlTestTolerance, mtu
+                allAccounts, filesDir.absolutePath, dns1, dns2, resolvedIps,
+                urlTestUrl, urlTestInterval, urlTestTolerance, mtu,
+                customRulesList
             )
 
             // Validate config
@@ -623,10 +656,29 @@ class JhopanVpnService : VpnService() {
             var started = false
             while (!started && !isStopping) {
                 try {
-                    commandServer?.startOrReloadService(configJson, null)
+                    // Clean up previous attempt
+                    try { boxService?.close() } catch (_: Exception) {}
+                    boxService = null
+                    try { commandServer?.close() } catch (_: Exception) {}
+
+                    // Re-create CommandServer for clean state
+                    commandServer = CommandServer(serverHandler, 31337)
+
+                    boxService = Libbox.newService(configJson, platformInterface)
+                    boxService?.start()
+                    commandServer?.setService(boxService)
+                    commandServer?.start()
+                    
+                    SingboxManager.markRunning()
                     started = true
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start sing-box: ${e.message}")
+                    // Clean up failed attempt
+                    try { boxService?.close() } catch (_: Exception) {}
+                    boxService = null
+                    try { commandServer?.close() } catch (_: Exception) {}
+                    commandServer = null
+
                     if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
                         reconnectAttempts++
                         val waitMs = maxOf(
@@ -644,7 +696,7 @@ class JhopanVpnService : VpnService() {
                     }
                 }
             }
-            if (isStopping) { commandServer?.closeService(); return }
+            if (isStopping) { boxService?.close(); commandServer?.close(); return }
 
             // Wait briefly for service to stabilize
             delay(1500)
@@ -695,12 +747,11 @@ class JhopanVpnService : VpnService() {
         reconnectWakeLock?.let { if (it.isHeld) it.release() }
         reconnectWakeLock = null
 
-        // Stop sing-box service
-        try {
-            commandServer?.closeService()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error closing sing-box service: ${e.message}")
-        }
+        // Stop sing-box service cleanly
+        try { boxService?.close() } catch (_: Exception) {}
+        boxService = null
+        try { commandServer?.close() } catch (_: Exception) {}
+        commandServer = null
 
         // Close TUN
         try {
@@ -749,7 +800,7 @@ class JhopanVpnService : VpnService() {
                         serviceScope.launch {
                             delay(networkReconnectDelaySeconds * 1000L)
                             connect(uri, lastBackupUris, lastDns1, lastDns2, lastMtu,
-                                lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance)
+                                lastUrlTestUrl, lastUrlTestInterval, lastUrlTestTolerance, lastCustomRulesJson)
                         }
                     }
                 }

@@ -3,92 +3,64 @@ package com.jhopanstore.vpn.core
 import android.util.Log
 
 /**
- * Enhanced Cloudflare Workers detection.
- *
- * Uses multiple signals to determine if a VLESS config routes through
- * Cloudflare Workers vs a direct VPS connection.
+ * Simplified Cloudflare Workers detection.
  *
  * Workers CANNOT create UDP sockets → DNS must use TCP.
  * VPS can do everything → normal UDP DNS works.
+ *
+ * Detection rules (in priority order):
+ * 1. Path is IP-port pattern (e.g. /103.6.207.108-8080) → Workers
+ * 2. Host/SNI is .workers.dev or .pages.dev → Workers
+ * 3. Non-standard path + worker keyword in host/SNI → Workers
  */
 object WorkerDetector {
     private const val TAG = "WorkerDetector"
 
+    // Regex: path starts with IP address followed by dash and port
+    // e.g. "103.6.207.108-8080" or "1.2.3.4-443"
+    private val IP_PORT_PATH = Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}-\d+$""")
+
     // Known Cloudflare Workers/Pages domains
-    private val WORKER_DOMAINS = listOf(
-        ".workers.dev",
-        ".pages.dev"
-    )
+    private val WORKER_DOMAINS = listOf(".workers.dev", ".pages.dev")
 
-    // Keywords that suggest CDN/Worker usage in host/SNI
-    private val WORKER_KEYWORDS = listOf(
-        "worker", "cdn", "cf-", "cloudflare",
-        "pages", "wrangler"
-    )
+    // Keywords that suggest CDN/Worker usage
+    private val WORKER_KEYWORDS = listOf("worker", "cdn", "cf-", "cloudflare", "pages")
 
-    // Common non-worker paths (direct VPS usually uses these)
-    private val VPS_PATHS = listOf(
-        "/vless", "/vmess", "/trojan", "/ss",
-        "/ws", "/websocket"
-    )
+    // Common VPS paths
+    private val VPS_PATHS = listOf("/vless", "/vmess", "/trojan", "/ss", "/ws", "/websocket")
 
     /**
      * Detect if traffic is routed through Cloudflare Workers.
-     *
-     * Detection signals (weighted):
-     * 1. Domain ends with .workers.dev or .pages.dev → STRONG signal
-     * 2. Path is NOT a common VPS path (e.g. not /vless) → MEDIUM signal
-     * 3. Port 80 + security "none" → MEDIUM signal (Workers often use port 80)
-     * 4. Host/SNI contains worker-related keywords → WEAK signal
-     * 5. Address is a Cloudflare IP but SNI differs → WEAK signal (CDN trick)
-     *
-     * Returns true if >= 1 STRONG signal, or >= 2 MEDIUM/WEAK signals.
      */
     fun isCloudflareWorkers(cfg: VlessConfig): Boolean {
-        var score = 0
+        val path = cfg.path.trimStart('/')
 
-        // Signal 1: Domain check (STRONG = +3)
-        val checkStrings = listOf(cfg.host, cfg.sni).filter { it.isNotBlank() }
-        val hasDomainSignal = checkStrings.any { s ->
-            WORKER_DOMAINS.any { d -> s.endsWith(d, ignoreCase = true) }
-        }
-        if (hasDomainSignal) {
-            score += 3
-            Log.d(TAG, "Signal 1 (domain): Workers domain detected")
+        // Rule 1: Path is IP-port pattern → definitely Workers
+        if (IP_PORT_PATH.matches(path)) {
+            Log.i(TAG, "Workers detected: path '$path' is IP-port pattern")
+            return true
         }
 
-        // Signal 2: Path check (MEDIUM = +2)
-        val pathLower = cfg.path.lowercase().trim()
-        val isCommonVpsPath = VPS_PATHS.any { pathLower == it || pathLower.startsWith("$it/") }
-        if (!isCommonVpsPath && pathLower.isNotEmpty()) {
-            score += 2
-            Log.d(TAG, "Signal 2 (path): Non-standard path '$pathLower' → likely Workers")
+        // Rule 2: Host/SNI is .workers.dev or .pages.dev
+        val domains = listOf(cfg.host, cfg.sni).filter { it.isNotBlank() }
+        if (domains.any { d -> WORKER_DOMAINS.any { d.endsWith(it, ignoreCase = true) } }) {
+            Log.i(TAG, "Workers detected: domain is workers.dev/pages.dev")
+            return true
         }
 
-        // Signal 3: Port 80 + no TLS (MEDIUM = +2)
-        if (cfg.port == 80 && cfg.security == "none") {
-            score += 2
-            Log.d(TAG, "Signal 3 (port): Port 80 + no TLS → likely Workers")
+        // Rule 3: Non-standard path + worker keyword in host/SNI
+        val isStandardPath = VPS_PATHS.any { vp ->
+            path.equals(vp.trimStart('/'), ignoreCase = true) ||
+            path.startsWith(vp.trimStart('/') + "/", ignoreCase = true)
+        }
+        if (!isStandardPath && path.isNotEmpty() && domains.any { d ->
+            WORKER_KEYWORDS.any { k -> d.contains(k, ignoreCase = true) }
+        }) {
+            Log.i(TAG, "Workers detected: non-standard path + worker keyword")
+            return true
         }
 
-        // Signal 4: Host/SNI keyword check (WEAK = +1)
-        val hasKeyword = checkStrings.any { s ->
-            WORKER_KEYWORDS.any { k -> s.contains(k, ignoreCase = true) }
-        }
-        if (hasKeyword) {
-            score += 1
-            Log.d(TAG, "Signal 4 (keyword): Worker keyword in host/SNI")
-        }
-
-        // Signal 5: Address != SNI/Host (CDN trick) (WEAK = +1)
-        val addressIsIp = cfg.address.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))
-        if (addressIsIp && cfg.sni.isNotBlank() && cfg.sni != cfg.address) {
-            score += 1
-            Log.d(TAG, "Signal 5 (CDN trick): IP address with different SNI")
-        }
-
-        val isWorker = score >= 3
-        Log.i(TAG, "Detection result: score=$score → ${if (isWorker) "WORKERS (TCP DNS)" else "VPS (normal DNS)"}")
-        return isWorker
+        Log.d(TAG, "VPS detected for ${cfg.address}")
+        return false
     }
 }

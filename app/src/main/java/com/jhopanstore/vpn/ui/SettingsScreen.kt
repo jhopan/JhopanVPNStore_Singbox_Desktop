@@ -1,7 +1,10 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 package com.jhopanstore.vpn.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,12 +20,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jhopanstore.vpn.R
@@ -536,14 +545,49 @@ private fun BehaviorTab(viewModel: MainViewModel, context: android.content.Conte
 
 @Composable
 private fun RulesTab(viewModel: MainViewModel) {
+    var selectedRuleName by remember { mutableStateOf("") }
+    var importStatus by remember { mutableStateOf("") }
+    var showRuleNameInput by remember { mutableStateOf(false) }
+    
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { fileUri ->
+            if (fileUri != null && selectedRuleName.isNotEmpty()) {
+                viewModel.importRuleFromFile(fileUri, selectedRuleName)
+                importStatus = "Imported! Click Apply to activate rule."
+                selectedRuleName = ""
+                showRuleNameInput = false
+            }
+        }
+    )
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(bottom = 16.dp)
     ) {
-        SectionHeader("Custom Routing Rules")
+        SectionHeader("Manual Rule Import")
 
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = "📥 Download rule JSON dari GitHub via browser → Import ke aplikasi → Pilih rute → Klik Apply untuk aktifkan.",
+                fontSize = 12.sp,
+                modifier = Modifier.padding(12.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                lineHeight = 16.sp
+            )
+        }
+
+        // New info card para RouteRules.git
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -553,19 +597,69 @@ private fun RulesTab(viewModel: MainViewModel) {
             ),
             shape = RoundedCornerShape(8.dp)
         ) {
-            Text(
-                text = "ℹ️  Rule otomatis di-download dari GitHub saat Anda klik Sync. " +
-                       "Pilih target rute untuk mengarahkan trafik (misal: Reject untuk blokir).",
-                fontSize = 12.sp,
-                modifier = Modifier.padding(12.dp),
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                lineHeight = 16.sp
-            )
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "📦 Download Rules dari Repository:",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                
+                // Clickable GitHub link
+                val uriHandler = LocalUriHandler.current
+                val context = LocalContext.current
+                
+                Text(
+                    text = buildAnnotatedString {
+                        append("1. Buka: ")
+                        pushStringAnnotation(tag = "URL", annotation = "https://github.com/jhopan/RouteRules.git")
+                        withStyle(style = SpanStyle(
+                            color = Color(0xFF2196F3),  // Material Blue
+                            textDecoration = TextDecoration.Underline
+                        )) {
+                            append("https://github.com/jhopan/RouteRules.git")
+                        }
+                        pop()
+                    },
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .clickable {
+                            try {
+                                uriHandler.openUri("https://github.com/jhopan/RouteRules.git")
+                            } catch (e: Exception) {
+                                // Fallback jika openUri tidak work
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                intent.data = android.net.Uri.parse("https://github.com/jhopan/RouteRules.git")
+                                context.startActivity(intent)
+                            }
+                        }
+                )
+                
+                Text(
+                    text = "2. Pilih folder 'singbox' → 'rules'",
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = "3. Download file .json yang diinginkan",
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = "4. Import ke aplikasi menggunakan tombol di bawah",
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
         }
 
         if (viewModel.customRules.isEmpty()) {
             Text(
-                text = "Belum ada custom rule. Tambahkan rule baru.",
+                text = "Belum ada custom rule. Import rule baru dari file.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -579,23 +673,79 @@ private fun RulesTab(viewModel: MainViewModel) {
             CustomRuleCard(
                 index = index,
                 rule = rule,
-                viewModel = viewModel,
-                enabled = !viewModel.isConnected,
-                onUpdate = { updated -> viewModel.updateCustomRule(index, updated) },
-                onDelete = { viewModel.removeCustomRule(index) }
+                viewModel = viewModel
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        OutlinedButton(
-            onClick = { viewModel.addCustomRule(MainViewModel.CustomRule("", "", "direct")) },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            shape = RoundedCornerShape(8.dp),
-            enabled = !viewModel.isConnected
+        // Import rule button
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("Tambah Rule", fontSize = 13.sp)
+            OutlinedButton(
+                onClick = { showRuleNameInput = !showRuleNameInput },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("📁 Import Rule File", fontSize = 13.sp)
+            }
+
+            if (showRuleNameInput) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = selectedRuleName,
+                    onValueChange = { selectedRuleName = it.replace(" ", "_") },
+                    label = { Text("Beri nama rule (tanpa spasi)", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("contoh: situsX, youtube") }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (selectedRuleName.isNotEmpty()) {
+                                filePickerLauncher.launch("application/json")
+                            } else {
+                                importStatus = "Masukkan nama rule dulu!"
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("Pilih File", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { 
+                            showRuleNameInput = false
+                            selectedRuleName = ""
+                            importStatus = ""
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("Batal", fontSize = 12.sp)
+                    }
+                }
+            }
+
+            if (importStatus.isNotBlank()) {
+                Text(
+                    text = importStatus,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
@@ -604,13 +754,22 @@ private fun RulesTab(viewModel: MainViewModel) {
 private fun CustomRuleCard(
     index: Int,
     rule: MainViewModel.CustomRule,
-    viewModel: MainViewModel,
-    enabled: Boolean,
-    onUpdate: (MainViewModel.CustomRule) -> Unit,
-    onDelete: () -> Unit
+    viewModel: MainViewModel
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var syncStatus by remember { mutableStateOf("") }
+    var applyStatus by remember { mutableStateOf("") }
+    var showEditMode by remember { mutableStateOf(false) }
+    
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { fileUri ->
+            if (fileUri != null) {
+                // Re-import file for existing rule
+                viewModel.importRuleFromFile(fileUri, rule.name, existingRuleIndex = index)
+                applyStatus = "File updated! Click Apply to activate."
+            }
+        }
+    )
     
     // Dynamically build targets
     val targets = mutableListOf("direct", "reject", "main")
@@ -627,21 +786,27 @@ private fun CustomRuleCard(
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = rule.name.ifEmpty { "Rule ${index + 1}" },
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = rule.name.ifEmpty { "Rule ${index + 1}" },
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "File: ${rule.fileName}",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Text(
                     text = "► ${rule.targetOutbound}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 8.dp)
+                    fontWeight = FontWeight.Bold
                 )
 
                 IconButton(
@@ -656,7 +821,7 @@ private fun CustomRuleCard(
                 }
 
                 IconButton(
-                    onClick = onDelete,
+                    onClick = { viewModel.deleteRule(index) },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
@@ -669,28 +834,13 @@ private fun CustomRuleCard(
             }
 
             if (expanded) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(modifier = Modifier.fillMaxWidth(), thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedTextField(
-                    value = rule.name,
-                    onValueChange = { onUpdate(rule.copy(name = it.replace(" ", "_"))) },
-                    label = { Text("Nama Rule (tanpa spasi)", fontSize = 12.sp) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-
-                OutlinedTextField(
-                    value = rule.url,
-                    onValueChange = { onUpdate(rule.copy(url = it)) },
-                    label = { Text("URL GitHub (RAW JSON)", fontSize = 12.sp) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text("Target Outbound:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Spacer(modifier = Modifier.height(4.dp))
+                // Target Rute section
+                Text("📍 Target Rute:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(modifier = Modifier.height(6.dp))
                 
                 androidx.compose.foundation.lazy.LazyRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -700,63 +850,51 @@ private fun CustomRuleCard(
                         val t = targets[i]
                         FilterChip(
                             selected = rule.targetOutbound == t,
-                            onClick = { onUpdate(rule.copy(targetOutbound = t)) },
-                            label = { Text(t, fontSize = 12.sp) }
+                            onClick = { viewModel.updateRuleTargetOutbound(index, t) },
+                            label = { Text(t, fontSize = 11.sp) }
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // Action buttons row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            if (rule.name.isNotBlank() && rule.url.isNotBlank()) {
-                                syncStatus = "Downloading..."
-                                viewModel.syncRuleFromGithub(
-                                    rule.name,
-                                    rule.url,
-                                    applyImmediately = false,
-                                    onSuccess = { msg -> syncStatus = "✅ $msg" },
-                                    onError = { err -> syncStatus = "❌ Gagal: $err" }
-                                )
-                            } else {
-                                syncStatus = "Isi nama & URL dulu."
-                            }
-                        },
-                        modifier = Modifier.weight(1f).height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Text("Download", fontSize = 11.sp, maxLines = 1)
-                    }
-
+                    // Apply button (disabled kalau VPN belum connected)
                     Button(
                         onClick = {
-                            if (rule.name.isNotBlank() && rule.url.isNotBlank()) {
-                                syncStatus = "Syncing & Applying..."
-                                viewModel.syncRuleFromGithub(
-                                    rule.name,
-                                    rule.url,
-                                    applyImmediately = true,
-                                    onSuccess = { msg -> syncStatus = "✅ $msg" },
-                                    onError = { err -> syncStatus = "❌ Gagal: $err" }
-                                )
+                            if (!viewModel.isConnected) {
+                                applyStatus = "❌ VPN harus connected dulu di layar utama!"
                             } else {
-                                syncStatus = "Isi nama & URL dulu."
+                                applyStatus = "⏳ Applying..."
+                                viewModel.applyRule(rule.name) { msg -> 
+                                    applyStatus = "✅ $msg" 
+                                }
                             }
                         },
-                        modifier = Modifier.weight(1f).height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
+                        enabled = viewModel.isConnected,
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(6.dp)
                     ) {
-                        Text("Sync & Apply", fontSize = 11.sp, maxLines = 1)
+                        Text("✓ Apply", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                    
+                    // Edit file button
+                    OutlinedButton(
+                        onClick = { filePickerLauncher.launch("application/json") },
+                        modifier = Modifier.weight(1f).height(40.dp),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("✎ Edit File", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
                 
-                if (syncStatus.isNotBlank()) {
+                if (applyStatus.isNotBlank()) {
                     Text(
-                        text = syncStatus, 
+                        text = applyStatus, 
                         fontSize = 11.sp, 
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),

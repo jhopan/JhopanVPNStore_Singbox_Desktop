@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            JhopanStoreVPNTheme {
+            JhopanStoreVPNTheme(darkTheme = true) {
                 val vm: MainViewModel = viewModel()
                 pendingViewModel = vm
                 var showAntiDcGuide by remember { mutableStateOf(false) }

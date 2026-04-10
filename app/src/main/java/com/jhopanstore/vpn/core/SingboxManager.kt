@@ -319,8 +319,9 @@ object SingboxManager {
                 // Custom Routing Rules injected directly
                 customRules.forEach { rule ->
                     val name = rule["name"] ?: ""
+                    val fileName = rule["fileName"] ?: "${name}.json"
                     val targetOutbound = rule["targetOutbound"] ?: "direct"
-                    val filePath = "$basePath/rules/$name.json"
+                    val filePath = "$basePath/rules/$fileName"
                     
                     val file = java.io.File(filePath)
                     if (name.isNotBlank() && file.exists()) {
@@ -336,7 +337,7 @@ object SingboxManager {
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e("SingboxManager", "Failed to parse $name.json", e)
+                            Log.e("SingboxManager", "Failed to parse $fileName", e)
                         }
                     }
                 }
