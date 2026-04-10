@@ -26,6 +26,12 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Download libbox.aar (from GitHub Releases)
+      run: |
+        mkdir -p app/libs
+        wget -q -O app/libs/libbox.aar "https://github.com/jhopan/Build/releases/download/v2.0.2-diet/libbox.aar"
+        ls -la app/libs/libbox.aar
+
     - name: Build with Gradle (Assemble Phone Release)
       run: ./gradlew assemblePhoneRelease --no-daemon
 
