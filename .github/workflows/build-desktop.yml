@@ -13,6 +13,228 @@ permissions:
   contents: write
 
 jobs:
+  # Windows 64-bit
+  build-windows:
+    name: Build Windows Desktop (64-bit)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+          cache: true
+
+      - name: Build Windows Executable
+        run: |
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "0"
+          
+          go build -ldflags="-s -w -H windowsgui -X 'main.Version=1.0.0'" -o dist/jhopan-vpn-windows-amd64.exe .
+          
+          if (Test-Path dist/jhopan-vpn-windows-amd64.exe) {
+            Write-Host "✓ Windows build success"
+          } else {
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jhopan-vpn-windows-amd64
+          path: dist/jhopan-vpn-windows-amd64.exe
+
+  # macOS Intel & Apple Silicon
+  build-macos:
+    name: Build macOS Desktop
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+          cache: true
+
+      - name: Build macOS Executable
+        run: |
+          export GOOS=darwin
+          export GOARCH=${{ matrix.arch }}
+          export CGO_ENABLED=0
+          
+          output="dist/jhopan-vpn-macos-${{ matrix.arch }}"
+          go build -ldflags="-s -w -X 'main.Version=1.0.0'" -o "$output" .
+          chmod +x "$output"
+
+      - name: Create App Bundle
+        run: |
+          BUNDLE="dist/JhopanStoreVPN-${{ matrix.arch }}.app/Contents"
+          mkdir -p "$BUNDLE/MacOS"
+          
+          cp "dist/jhopan-vpn-macos-${{ matrix.arch }}" "$BUNDLE/MacOS/jhopan-vpn"
+          chmod +x "$BUNDLE/MacOS/jhopan-vpn"
+          
+          mkdir -p "$BUNDLE/Resources"
+          
+          cat > "$BUNDLE/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>jhopan-vpn</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.jhopanstorevpn.app</string>
+            <key>CFBundleName</key>
+            <string>JhopanStoreVPN</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleVersion</key>
+            <string>1.0.0</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+          </dict>
+          </plist>
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jhopan-vpn-macos-${{ matrix.arch }}
+          path: dist/
+
+  # Linux amd64 & arm64
+  build-linux:
+    name: Build Linux Desktop
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+          cache: true
+
+      - name: Build Linux Executable
+        run: |
+          export GOOS=linux
+          export GOARCH=${{ matrix.arch }}
+          export CGO_ENABLED=0
+          
+          output="dist/jhopan-vpn-linux-${{ matrix.arch }}"
+          go build -ldflags="-s -w -X 'main.Version=1.0.0'" -o "$output" .
+          chmod +x "$output"
+
+      - name: Create Desktop Entry
+        if: matrix.arch == 'amd64'
+        run: |
+          mkdir -p dist/desktop
+          cat > dist/desktop/jhopan-vpn.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=JhopanStoreVPN
+          Exec=jhopan-vpn
+          Icon=jhopan-vpn
+          Categories=Network;Utility;
+          Terminal=false
+          Comment=VPN Client with Sing-box Engine
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jhopan-vpn-linux-${{ matrix.arch }}
+          path: dist/
+
+  # Create Release (triggered on version tags only)
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: JhopanStoreVPN ${{ github.ref_name }}
+          body: |
+            # 🚀 JhopanStoreVPN Desktop Release
+
+            Cross-platform VPN application with Sing-box engine.
+
+            ## 📦 Downloads
+
+            ### Windows
+            - **jhopan-vpn-windows-amd64.exe** - 64-bit executable
+
+            ### macOS
+            - **jhopan-vpn-macos-amd64** - Intel (x86_64)
+            - **jhopan-vpn-macos-arm64** - Apple Silicon (M1+)
+            - **JhopanStoreVPN-*.app** - macOS App Bundle
+
+            ### Linux
+            - **jhopan-vpn-linux-amd64** - x86_64 binary
+            - **jhopan-vpn-linux-arm64** - ARM64 binary (Raspberry Pi)
+
+            ## ✨ Features
+            - Sing-box v1.11+ proxy engine
+            - TUN interface support (Linux/macOS)
+            - Cross-platform (Windows/macOS/Linux)
+            - Lightweight (~140MB RAM)
+            - Auto-failover & custom rules
+
+            ## 🔧 Installation
+
+            **Windows:**
+            ```powershell
+            ./jhopan-vpn-windows-amd64.exe
+            ```
+
+            **macOS:**
+            ```bash
+            ./jhopan-vpn-macos-amd64
+            # or use App Bundle
+            open -a JhopanStoreVPN
+            ```
+
+            **Linux:**
+            ```bash
+            sudo ./jhopan-vpn-linux-amd64
+            ```
+
+            Built with Go 1.22 and Fyne GUI framework.
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+name: Build Desktop App (Windows, macOS, Linux)
+
+on:
+  push:
+    branches: [main, master, develop]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================================
+  # BUILD-WINDOWS: Windows 64-bit (Native runner)
+  # ============================================================================
   # ============================================================================
   # BUILD-WINDOWS: Windows 64-bit Desktop (native Windows runner)
   # ============================================================================
