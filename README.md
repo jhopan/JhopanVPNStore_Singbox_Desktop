@@ -73,17 +73,17 @@ Aplikasi VPN Android **full-featured** yang mengutamakan:
 
 ## 📦 Arsitektur & Teknologi
 
-| Komponen | Detail |
-|----------|--------|
-| **VPN Engine** | Sing-box v1.11.0 (native Go via libbox.aar) |
-| **Protocol** | VLESS (WebSocket + TLS) |
-| **Routing** | Kernel TUN Interface (0% root required) |
-| **UI Framework** | Jetpack Compose Material3 |
-| **Language** | Kotlin 100% |
-| **Min OS** | Android 7.0+ (API 24) |
-| **Target OS** | Android 14+ (API 34) |
-| **APK Size** | v8a: ~22 MB, v7a: ~20 MB, Universal: ~41 MB |
-| **Battery** | ✅ Optimal (native + smart job management) |
+| Komponen         | Detail                                      |
+| ---------------- | ------------------------------------------- |
+| **VPN Engine**   | Sing-box v1.11.0 (native Go via libbox.aar) |
+| **Protocol**     | VLESS (WebSocket + TLS)                     |
+| **Routing**      | Kernel TUN Interface (0% root required)     |
+| **UI Framework** | Jetpack Compose Material3                   |
+| **Language**     | Kotlin 100%                                 |
+| **Min OS**       | Android 7.0+ (API 24)                       |
+| **Target OS**    | Android 14+ (API 34)                        |
+| **APK Size**     | v8a: ~22 MB, v7a: ~20 MB, Universal: ~41 MB |
+| **Battery**      | ✅ Optimal (native + smart job management)  |
 
 ### Mengapa Sing-box, bukan Xray?
 
@@ -106,6 +106,7 @@ Aplikasi VPN Android **full-featured** yang mengutamakan:
    - **`universal.apk`** ← Untuk emulator & semua device sekaligus
 
 3. Install:
+
 ```bash
 adb install -r JhopanStoreVPN_Singbox_arm64-v8a.apk
 ```
@@ -113,6 +114,7 @@ adb install -r JhopanStoreVPN_Singbox_arm64-v8a.apk
 ### 📦 Dari Mana AAR-nya?
 
 **libbox.aar** (sing-box native) diambil dari:
+
 ```
 https://github.com/jhopan/Build/releases/download/v2.0.2-diet/libbox.aar
 ```
@@ -135,12 +137,14 @@ https://github.com/jhopan/Build/releases/download/v2.0.2-diet/libbox.aar
 ### Langkah-Langkah
 
 1. **Clone repository:**
+
 ```bash
 git clone https://github.com/jhopan/JhopanStoreVPN_Singbox.git
 cd JhopanStoreVPN_Singbox
 ```
 
 2. **Build APK (Gradle akan auto-download libbox.aar):**
+
 ```bash
 # Build untuk Android devices (ARM64 — recommended)
 ./gradlew assemblePhoneRelease -x test
@@ -150,11 +154,13 @@ cd JhopanStoreVPN_Singbox
 ```
 
 3. **APK ready di:**
+
 ```
 app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.apk
 ```
 
 4. **Install:**
+
 ```bash
 adb install -r app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.apk
 ```
@@ -167,6 +173,7 @@ adb install -r app/build/outputs/apk/phone/release/app-phone-arm64-v8a-release.a
 ### Custom AAR URL (Opsional)
 
 Jika punya private AAR server:
+
 ```bash
 export LIBBOX_AAR_URL=https://your-server.com/libbox.aar
 ./gradlew assemblePhoneRelease
@@ -195,12 +202,14 @@ Repository ini dilengkapi **GitHub Actions workflow** untuk build & release otom
 ## 📋 Spesifikasi Aplikasi
 
 ### Main Screen
+
 - ✅ **Connect/Disconnect Button** dengan status visual
 - ✅ **Live Ping Display** (ms latency)
 - ✅ **Real-time Data Usage** (upload/download stats)
 - ✅ **Connection Status** (Connected, Connecting, Disconnected)
 
 ### Settings
+
 - ✅ **Server Configuration** (address, port, protocol)
 - ✅ **DNS Settings** (default, custom, CloudFlare, etc)
 - ✅ **MTU Configuration** (network tweaking)
@@ -209,12 +218,14 @@ Repository ini dilengkapi **GitHub Actions workflow** untuk build & release otom
 - ✅ **Wake Lock** (prevent sleep during VPN)
 
 ### Rules Management
+
 - ✅ **Import Custom Rules** (JSON format)
 - ✅ **Manage Rules** (enable/disable/delete)
 - ✅ **Apply Rules on Connect** (dynamic routing)
 - ✅ **Routing Targets** (main, backup, direct, reject)
 
 ### Advanced Features
+
 - ✅ **Multi-Server Backup** (failover support)
 - ✅ **Account Auto-Switcher** (rotate servers)
 - ✅ **Traffic Analytics** (real-time monitoring)
@@ -244,12 +255,12 @@ Permission is hereby granted, free of charge...
 
 ## 🔗 Links
 
-| Link | Purpose |
-|------|---------|
-| [Releases](https://github.com/jhopan/JhopanStoreVPN_Singbox/releases) | Download APK |
-| [Issues](https://github.com/jhopan/JhopanStoreVPN_Singbox/issues) | Bug Report |
+| Link                                                                        | Purpose         |
+| --------------------------------------------------------------------------- | --------------- |
+| [Releases](https://github.com/jhopan/JhopanStoreVPN_Singbox/releases)       | Download APK    |
+| [Issues](https://github.com/jhopan/JhopanStoreVPN_Singbox/issues)           | Bug Report      |
 | [Discussions](https://github.com/jhopan/JhopanStoreVPN_Singbox/discussions) | Feature Request |
-| [libbox Source](https://github.com/jhopan/Build) | Sing-box Binary |
+| [libbox Source](https://github.com/jhopan/Build)                            | Sing-box Binary |
 
 ---
 
