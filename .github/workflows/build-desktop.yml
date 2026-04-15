@@ -26,8 +26,6 @@ jobs:
             name: "64-bit"
           - arch: "386"
             name: "32-bit"
-          - arch: arm64
-            name: "ARM64"
 
     steps:
       - name: Checkout Repository
@@ -43,7 +41,7 @@ jobs:
         run: |
           $env:GOOS = "windows"
           $env:GOARCH = "${{ matrix.arch }}"
-          $env:CGO_ENABLED = "1"
+          $env:CGO_ENABLED = "0"
           
           $output = "dist/jhopan-vpn-windows-${{ matrix.arch }}.exe"
           
@@ -53,7 +51,12 @@ jobs:
             .
           
           Write-Host "✓ Built: $output"
-          Get-Item $output | ForEach-Object { Write-Host "  Size: $(($_.Length / 1MB).ToString('F2')) MB" }
+          if (Test-Path $output) {
+            Get-Item $output | ForEach-Object { Write-Host "  Size: $(($_.Length / 1MB).ToString('F2')) MB" }
+          } else {
+            Write-Error "Build failed!"
+            exit 1
+          }
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -113,7 +116,7 @@ jobs:
   # BUILD-LINUX: Ubuntu & Fedora with TUN Interface Support
   # ============================================================================
   build-linux:
-    name: Build Linux Desktop (TUN Mode - Ubuntu/Fedora)
+    name: Build Linux Desktop (TUN Mode)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -122,8 +125,6 @@ jobs:
             name: "x86_64"
           - arch: arm64
             name: "ARM64"
-          - arch: arm
-            name: "ARMv7"
 
     steps:
       - name: Checkout Repository
@@ -135,28 +136,25 @@ jobs:
           go-version: 1.22
           cache: true
 
-      - name: Install Linux TUN Development Headers
+      - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libfuse-dev \
             pkg-config \
             build-essential
           
-          echo "✓ Installed TUN/TAP and development headers"
+          # For ARM64 cross-compilation
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+          
+          echo "✓ Build dependencies installed"
 
-      - name: Build Linux Executable (TUN Support) - ${{ matrix.name }}
+      - name: Build Linux Executable - ${{ matrix.name }}
         run: |
           export GOOS=linux
           export GOARCH=${{ matrix.arch }}
-          export CGO_ENABLED=1
-          
-          # For 32-bit ARM, set CC to cross-compiler
-          if [ "${{ matrix.arch }}" = "arm" ]; then
-            export CC="arm-linux-gnueabihf-gcc"
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            export CC="aarch64-linux-gnu-gcc"
-          fi
+          export CGO_ENABLED=0
           
           output="dist/jhopan-vpn-linux-${{ matrix.arch }}"
           
@@ -165,12 +163,14 @@ jobs:
             -o "$output" \
             .
           
-          echo "✓ Built: $output"
-          du -h "$output" | awk '{print "  Size: " $1}'
-          
-          # Check TUN capability
-          echo "Checking TUN interface support in binary..."
-          strings "$output" | grep -i "tun\|wintun" || echo "  (TUN references found in build)"
+          if [ -f "$output" ]; then
+            echo "✓ Built: $output"
+            du -h "$output" | awk '{print "  Size: " $1}'
+            chmod +x "$output"
+          else
+            echo "✗ Build failed!"
+            exit 1
+          fi
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
@@ -186,6 +186,7 @@ jobs:
     name: Build Windows Installer (Inno Setup)
     runs-on: windows-latest
     needs: build-windows
+    if: success()
 
     steps:
       - name: Checkout Repository
@@ -204,16 +205,8 @@ jobs:
 
       - name: Install Inno Setup
         run: |
-          # Download Inno Setup from GitHub releases
-          $url = "https://github.com/jrsoftware/innosetup/releases/download/is-6.3.3/innosetup-6.3.3.exe"
-          $installer = "$env:TEMP\InnoSetup.exe"
-          
-          Write-Host "Downloading Inno Setup 6.3.3..."
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          
-          Write-Host "Installing Inno Setup..."
-          & $installer /VERYSILENT /SUPPRESSMSGBOXES /SP- | Out-Null
-          
+          # Install Inno Setup using Chocolatey (pre-installed on windows-latest)
+          choco install innosetup -y --no-progress
           Write-Host "✓ Inno Setup installed"
 
       - name: Build Windows Installer
@@ -221,14 +214,21 @@ jobs:
           $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           
           if (-not (Test-Path $isccPath)) {
-            throw "ISCC.exe not found!"
+            Write-Host "Searching for ISCC.exe..."
+            $found = Get-ChildItem -Path "C:\Program Files*" -Recurse -Name "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              $isccPath = $found.FullName
+              Write-Host "Found ISCC at: $isccPath"
+            } else {
+              throw "ISCC.exe not found!"
+            }
           }
           
           Write-Host "Compiling Inno Setup script..."
           & $isccPath "installer/setup.iss"
           
           if ($LASTEXITCODE -ne 0) {
-            throw "Inno Setup compilation failed!"
+            throw "Inno Setup compilation failed with exit code $LASTEXITCODE!"
           }
           
           Write-Host "✓ Installer created successfully"
@@ -246,8 +246,8 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-windows, build-macos, build-linux, build-windows-installer]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v') && always()
 
     steps:
       - name: Checkout Repository
@@ -285,17 +285,15 @@ jobs:
           ### Windows
           - **jhopan-vpn-windows-amd64.exe** - 64-bit (Recommended)
           - **jhopan-vpn-windows-386.exe** - 32-bit
-          - **jhopan-vpn-windows-arm64.exe** - ARM64
-          - **JhopanStoreVPN_Installer_v*.exe** - Complete Installer Package
+          - **JhopanStoreVPN_Installer_v*.exe** - Complete Installer Package (if available)
           
           ### macOS
           - **jhopan-vpn-macos-amd64** - Intel (x86_64)
           - **jhopan-vpn-macos-arm64** - Apple Silicon (M1, M2, M3, etc.)
           
           ### Linux (Ubuntu/Fedora with TUN Mode)
-          - **jhopan-vpn-linux-amd64** - x86_64
+          - **jhopan-vpn-linux-amd64** - x86_64 (Recommended)
           - **jhopan-vpn-linux-arm64** - ARM64 (Raspberry Pi 4+)
-          - **jhopan-vpn-linux-arm** - ARMv7 (Older ARM devices)
           
           ## ✨ Features
           - **Sing-box v1.11+** - Modern proxy engine
