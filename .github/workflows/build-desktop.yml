@@ -26,9 +26,9 @@ jobs:
 
       - name: Build Windows Executable
         run: |
-          `$env:GOOS = "windows"
-          `$env:GOARCH = "amd64"
-          `$env:CGO_ENABLED = "0"
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "0"
           
           go build -ldflags="-s -w -H windowsgui" -o dist/jhopan-vpn-windows-amd64.exe .
 
@@ -53,13 +53,13 @@ jobs:
 
       - name: Build macOS Executable
         run: |
-          export GOOS=darwin GOARCH=`${{ matrix.arch }}` CGO_ENABLED=0
-          go build -ldflags="-s -w" -o dist/jhopan-vpn-macos-`${{ matrix.arch }}` .
+          export GOOS=darwin GOARCH=${{ matrix.arch }} CGO_ENABLED=0
+          go build -ldflags="-s -w" -o dist/jhopan-vpn-macos-${{ matrix.arch }} .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jhopan-vpn-macos-`${{ matrix.arch }}`
-          path: dist/jhopan-vpn-macos-`${{ matrix.arch }}`
+          name: jhopan-vpn-macos-${{ matrix.arch }}
+          path: dist/jhopan-vpn-macos-${{ matrix.arch }}
 
   build-linux:
     name: Build Linux Desktop
@@ -77,13 +77,13 @@ jobs:
 
       - name: Build Linux Executable
         run: |
-          export GOOS=linux GOARCH=`${{ matrix.arch }}` CGO_ENABLED=0
-          go build -ldflags="-s -w" -o dist/jhopan-vpn-linux-`${{ matrix.arch }}` .
+          export GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0
+          go build -ldflags="-s -w" -o dist/jhopan-vpn-linux-${{ matrix.arch }} .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jhopan-vpn-linux-`${{ matrix.arch }}`
-          path: dist/jhopan-vpn-linux-`${{ matrix.arch }}`
+          name: jhopan-vpn-linux-${{ matrix.arch }}
+          path: dist/jhopan-vpn-linux-${{ matrix.arch }}
 
   release:
     name: Create GitHub Release
@@ -99,10 +99,10 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: JhopanStoreVPN `${{ github.ref_name }}`
+          name: JhopanStoreVPN ${{ github.ref_name }}
           body: |
             # JhopanStoreVPN Desktop
             Cross-platform VPN app with Sing-box engine
           files: artifacts/**/*
         env:
-          GITHUB_TOKEN: `${{ secrets.GITHUB_TOKEN }}`
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
