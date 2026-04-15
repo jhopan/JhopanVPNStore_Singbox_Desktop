@@ -14,18 +14,11 @@ permissions:
 
 jobs:
   # ============================================================================
-  # BUILD-WINDOWS: Windows 32-bit & 64-bit Desktop
+  # BUILD-WINDOWS: Windows 64-bit Desktop (native Windows runner)
   # ============================================================================
   build-windows:
-    name: Build Windows Desktop (32-bit & 64-bit)
+    name: Build Windows Desktop (64-bit)
     runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            name: "64-bit"
-          - arch: "386"
-            name: "32-bit"
 
     steps:
       - name: Checkout Repository
@@ -37,33 +30,304 @@ jobs:
           go-version: 1.22
           cache: true
 
-      - name: Build Windows ${{ matrix.name }} Executable
+      - name: Build Windows 64-bit Executable
         run: |
           $env:GOOS = "windows"
-          $env:GOARCH = "${{ matrix.arch }}"
+          $env:GOARCH = "amd64"
           $env:CGO_ENABLED = "0"
           
-          $output = "dist/jhopan-vpn-windows-${{ matrix.arch }}.exe"
+          $output = "dist/jhopan-vpn-windows-amd64.exe"
           
           go build `
             -ldflags="-s -w -H windowsgui -X 'main.Version=1.0.0'" `
             -o "$output" `
             .
           
-          Write-Host "✓ Built: $output"
           if (Test-Path $output) {
+            Write-Host "✓ Built: $output"
             Get-Item $output | ForEach-Object { Write-Host "  Size: $(($_.Length / 1MB).ToString('F2')) MB" }
           } else {
             Write-Error "Build failed!"
             exit 1
           }
 
-      - name: Upload Windows Artifacts
+      - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: JhopanVPN-Windows-${{ matrix.arch }}
-          path: dist/jhopan-vpn-windows-${{ matrix.arch }}.exe
+          name: JhopanVPN-Windows-amd64
+          path: dist/jhopan-vpn-windows-amd64.exe
           retention-days: 30
+
+  # ============================================================================
+  # BUILD-MACOS: macOS Intel & Apple Silicon (native macOS runner)
+  # ============================================================================
+  build-macos:
+    name: Build macOS Desktop
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            name: "Intel (x86_64)"
+          - arch: arm64
+            name: "Apple Silicon (M1+)"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+          cache: true
+
+      - name: Build macOS ${{ matrix.name }} Executable
+        run: |
+          export GOOS=darwin
+          export GOARCH=${{ matrix.arch }}
+          export CGO_ENABLED=0
+          
+          output="dist/jhopan-vpn-macos-${{ matrix.arch }}"
+          
+          go build \
+            -ldflags="-s -w -X 'main.Version=1.0.0'" \
+            -o "$output" \
+            .
+          
+          if [ -f "$output" ]; then
+            echo "✓ Built: $output"
+            du -h "$output" | awk '{print "  Size: " $1}'
+            chmod +x "$output"
+          else
+            echo "✗ Build failed!"
+            exit 1
+          fi
+
+      - name: Create macOS App Bundle
+        run: |
+          BUNDLE_DIR="dist/JhopanStoreVPN.app/Contents"
+          mkdir -p "$BUNDLE_DIR/MacOS"
+          mkdir -p "$BUNDLE_DIR/Resources"
+          
+          # Copy executable
+          cp "dist/jhopan-vpn-macos-${{ matrix.arch }}" "$BUNDLE_DIR/MacOS/jhopan-vpn"
+          chmod +x "$BUNDLE_DIR/MacOS/jhopan-vpn"
+          
+          # Create Info.plist
+          cat > "$BUNDLE_DIR/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>jhopan-vpn</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.jhopanstorevpn.app</string>
+              <key>CFBundleName</key>
+              <string>JhopanStoreVPN</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleVersion</key>
+              <string>1.0.0</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.13</string>
+          </dict>
+          </plist>
+          EOF
+          
+          echo "✓ App bundle created: dist/JhopanStoreVPN.app"
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: JhopanVPN-macOS-${{ matrix.arch }}
+          path: |
+            dist/jhopan-vpn-macos-${{ matrix.arch }}
+            dist/JhopanStoreVPN.app
+          retention-days: 30
+
+  # ============================================================================
+  # BUILD-LINUX: Linux x86_64 & ARM64 (build AppImage + standalone)
+  # ============================================================================
+  build-linux:
+    name: Build Linux Desktop
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            name: "x86_64"
+          - arch: arm64
+            name: "ARM64"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+          cache: true
+
+      - name: Build Linux Executable - ${{ matrix.name }}
+        run: |
+          export GOOS=linux
+          export GOARCH=${{ matrix.arch }}
+          export CGO_ENABLED=0
+          
+          output="dist/jhopan-vpn-linux-${{ matrix.arch }}"
+          
+          go build \
+            -ldflags="-s -w -X 'main.Version=1.0.0'" \
+            -o "$output" \
+            .
+          
+          if [ -f "$output" ]; then
+            echo "✓ Built: $output"
+            du -h "$output" | awk '{print "  Size: " $1}'
+            chmod +x "$output"
+          else
+            echo "✗ Build failed!"
+            exit 1
+          fi
+
+      - name: Create Linux Desktop Entry
+        if: matrix.arch == 'amd64'
+        run: |
+          mkdir -p dist/linux
+          cat > dist/linux/jhopan-vpn.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=JhopanStoreVPN
+          Exec=jhopan-vpn
+          Icon=jhopan-vpn
+          Categories=Utility;Network;
+          Terminal=false
+          
+          [Desktop Action Connect]
+          Name=Connect VPN
+          Exec=jhopan-vpn --connect
+          EOF
+          echo "✓ Desktop entry created"
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: JhopanVPN-Linux-${{ matrix.arch }}
+          path: |
+            dist/jhopan-vpn-linux-${{ matrix.arch }}
+            dist/linux/
+          retention-days: 30
+
+  # ============================================================================
+  # CREATE-RELEASE: Create GitHub Release with All Binaries
+  # ============================================================================
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Prepare Release Files
+        run: |
+          mkdir -p release-output
+          
+          find release-assets -type f -executable -o -type f -name "*.exe" -o -type f -name "*.app" | while read file; do
+            filename=$(basename "$file")
+            cp "$file" "release-output/$filename" 2>/dev/null || true
+          done
+          
+          echo "Release files ready:"
+          ls -lh release-output/ || echo "No files found"
+
+      - name: Create Release Notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # JhopanStoreVPN Desktop v${{ github.ref_name }}
+          
+          🚀 **Cross-Platform Desktop Application** - Sing-box VPN Engine
+          
+          ## 📦 Downloads
+          
+          ### Windows
+          - **jhopan-vpn-windows-amd64.exe** - 64-bit Standalone Executable
+          
+          ### macOS
+          - **jhopan-vpn-macos-amd64** - Intel (x86_64) Standalone
+          - **jhopan-vpn-macos-arm64** - Apple Silicon (M1, M2, M3+) Standalone
+          - **JhopanStoreVPN.app** - macOS App Bundle (Drag to Applications)
+          
+          ### Linux
+          - **jhopan-vpn-linux-amd64** - x86_64 Standalone Binary
+          - **jhopan-vpn-linux-arm64** - ARM64 Standalone Binary (Raspberry Pi 4+)
+          
+          ## ✨ Features
+          - **Sing-box v1.11+** - Modern proxy engine
+          - **TUN Interface** - Kernel-level routing (Linux/macOS)
+          - **Cross-Platform** - Windows, macOS, Linux
+          - **Lightweight** - ~140 MB RAM, minimal CPU usage
+          - **Auto-Failover** - Smart connection management
+          - **Custom Rules** - Support for site and rule filtering
+          
+          ## 🔧 Installation
+          
+          **Windows:**
+          ```powershell
+          .\jhopan-vpn-windows-amd64.exe
+          ```
+          
+          **macOS:**
+          ```bash
+          # Option 1: Direct execution
+          chmod +x jhopan-vpn-macos-amd64
+          ./jhopan-vpn-macos-amd64
+          
+          # Option 2: Use App Bundle (Recommended)
+          # Drag JhopanStoreVPN.app to Applications folder
+          open -a JhopanStoreVPN
+          ```
+          
+          **Linux:**
+          ```bash
+          chmod +x jhopan-vpn-linux-amd64
+          sudo ./jhopan-vpn-linux-amd64  # Requires root for TUN mode
+          ```
+          
+          ## 📋 Build Info
+          - **Version:** ${{ github.ref_name }}
+          - **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - **Repository:** ${{ github.repository }}
+          
+          ---
+          
+          **Built with:**
+          - Go 1.22
+          - Fyne GUI Framework
+          - Sing-box Proxy Engine  
+          - Wintun/TUN Interface
+          EOF
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: JhopanStoreVPN Desktop ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: release-output/*
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
   # BUILD-MACOS: macOS Intel & Apple Silicon
