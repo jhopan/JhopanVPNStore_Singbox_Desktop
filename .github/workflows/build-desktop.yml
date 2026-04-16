@@ -229,18 +229,23 @@ jobs:
           body: |
             # JhopanStoreVPN Desktop
 
-            Build ini berisi paket desktop saja (APK Android tidak dipakai lagi).
+            ## Pilih file yang sesuai
 
-            ## Cara pilih file (kapan dipakai)
-            - Windows 64-bit: pilih jhopan-vpn-windows-amd64.exe (PC/laptop Windows modern).
-            - Windows 32-bit: pilih jhopan-vpn-windows-386.exe (Windows lama 32-bit).
-            - macOS Intel: pilih jhopan-vpn-macos-amd64.dmg (Mac Intel).
-            - macOS Apple Silicon: pilih jhopan-vpn-macos-arm64.dmg (M1/M2/M3).
-            - Ubuntu/Debian: pilih file .deb.
-            - Fedora/RHEL/CentOS: pilih file .rpm.
+            | OS / Perangkat | File yang dipilih | Kapan dipakai |
+            | --- | --- | --- |
+            | Windows 64-bit | `jhopan-vpn-windows-amd64.exe` | Untuk PC/laptop Windows modern |
+            | Windows 32-bit | `jhopan-vpn-windows-386.exe` | Untuk Windows lama 32-bit |
+            | macOS Intel | `jhopan-vpn-macos-amd64.dmg` | Untuk Mac Intel / x86_64 |
+            | macOS Apple Silicon | `jhopan-vpn-macos-arm64.dmg` | Untuk Mac M1, M2, M3 dan seterusnya |
+            | Ubuntu / Debian | `jhopan-vpn-*.deb` | Untuk sistem berbasis Debian |
+            | Fedora / RHEL / CentOS | `jhopan-vpn-*.rpm` | Untuk sistem berbasis RPM |
 
             ## Catatan
-            - Jika ingin instal manual Linux tanpa paket manager, gunakan jhopan-vpn-linux-amd64.
+            - APK Android tidak disertakan lagi di release ini.
+            - Jika ingin instal manual Linux tanpa paket manager, gunakan `jhopan-vpn-linux-amd64`.
+
+            ## Ringkas
+            - Kalau masih ragu, pilih sesuai OS dan arsitektur CPU yang dipakai perangkat.
           files: release-files/*
           draft: false
           prerelease: false
