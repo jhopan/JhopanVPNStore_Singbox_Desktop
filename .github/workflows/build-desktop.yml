@@ -157,20 +157,31 @@ jobs:
           cp dist/jhopan-vpn-linux-amd64.bin package-root/usr/local/bin/jhopan-vpn
           chmod +x package-root/usr/local/bin/jhopan-vpn
 
+          # Build .deb package
           fpm -s dir -t deb -n jhopan-vpn -v "$VERSION" -a amd64 \
             --description "JhopanStoreVPN Desktop (Ubuntu/Debian package)" \
             --maintainer "jhopan" \
             --url "https://github.com/jhopan/JhopanVPNStore_Singbox_Desktop" \
             -C package-root .
 
+          # Build .rpm package
           fpm -s dir -t rpm -n jhopan-vpn -v "$VERSION" -a x86_64 \
             --description "JhopanStoreVPN Desktop (Fedora/RHEL package)" \
             --maintainer "jhopan" \
             --url "https://github.com/jhopan/JhopanVPNStore_Singbox_Desktop" \
             -C package-root .
 
-          mv ./*.deb dist/
-          mv ./*.rpm dist/
+          # Rename packages to standardized naming convention
+          # FPM .deb output: jhopan-vpn_<VERSION>_amd64.deb (already correct)
+          # FPM .rpm output: jhopan-vpn-<VERSION>-<RELEASE>.x86_64.rpm (remove release number)
+          DEB_FILE=$(ls jhopan-vpn_*_amd64.deb)
+          RPM_FILE=$(ls jhopan-vpn-*-*.x86_64.rpm)
+          
+          # Rename .deb to standardized format jhopan-vpn_<version>_amd64.deb
+          mv "$DEB_FILE" "dist/jhopan-vpn_${VERSION}_amd64.deb"
+          
+          # Rename .rpm to standardized format jhopan-vpn_<version>.x86_64.rpm
+          mv "$RPM_FILE" "dist/jhopan-vpn_${VERSION}.x86_64.rpm"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -229,25 +240,33 @@ jobs:
           body: |
             # JhopanStoreVPN Desktop
 
-            ## Pilih file yang sesuai
+            ## Pilih file yang sesuai dengan OS dan arsitektur Anda
 
-            | OS / Perangkat | File yang dipilih | Kapan dipakai |
-            | --- | --- | --- |
-            | Windows 64-bit | `jhopan-vpn-windows-amd64.exe` | Untuk PC/laptop Windows modern |
-            | Windows 32-bit | `jhopan-vpn-windows-386.exe` | Untuk Windows lama 32-bit |
-            | macOS Intel | `jhopan-vpn-macos-amd64.dmg` | Installer untuk Mac Intel / x86_64 |
-            | macOS Apple Silicon | `jhopan-vpn-macos-arm64.dmg` | Installer untuk Mac M1, M2, M3 dan seterusnya |
-            | macOS Intel (manual) | `jhopan-vpn-macos-amd64.bin` | Jika ingin jalankan binary langsung |
-            | macOS Apple Silicon (manual) | `jhopan-vpn-macos-arm64.bin` | Jika ingin jalankan binary langsung |
-            | Ubuntu / Debian | `jhopan-vpn-*.deb` | Untuk sistem berbasis Debian |
-            | Fedora / RHEL / CentOS | `jhopan-vpn-*.rpm` | Untuk sistem berbasis RPM |
-            | Linux generic (manual) | `jhopan-vpn-linux-amd64.bin` | Jika tanpa paket manager |
+            | OS / Perangkat | File yang dipilih | Format | Keterangan |
+            | --- | --- | --- | --- |
+            | **Windows 64-bit** | `jhopan-vpn-windows-amd64.exe` | .exe | Untuk PC/laptop Windows modern (x86_64) |
+            | **Windows 32-bit** | `jhopan-vpn-windows-386.exe` | .exe | Untuk Windows lama 32-bit (i386) |
+            | **macOS Intel** | `jhopan-vpn-macos-amd64.dmg` | .dmg | Installer untuk Mac Intel / x86_64 |
+            | **macOS Apple Silicon** | `jhopan-vpn-macos-arm64.dmg` | .dmg | Installer untuk Mac M1, M2, M3, dst |
+            | macOS Intel (manual) | `jhopan-vpn-macos-amd64.bin` | .bin | Binary langsung untuk Mac Intel |
+            | macOS Apple Silicon (manual) | `jhopan-vpn-macos-arm64.bin` | .bin | Binary langsung untuk Mac Apple Silicon |
+            | **Ubuntu / Debian** | `jhopan-vpn_*_amd64.deb` | .deb | Installer untuk sistem Debian/Ubuntu 64-bit |
+            | **Fedora / RHEL / CentOS** | `jhopan-vpn_*.x86_64.rpm` | .rpm | Installer untuk sistem Fedora/RHEL/CentOS |
+            | Linux generic (manual) | `jhopan-vpn-linux-amd64.bin` | .bin | Binary langsung untuk Linux 64-bit |
 
-            ## Catatan
-            - Semua file build utama memakai ekstensi yang jelas: `.exe`, `.dmg`, `.bin`, `.deb`, `.rpm`.
+            ## Naming Convention Penjelasan
 
-            ## Ringkas
-            - Kalau masih ragu, pilih sesuai OS dan arsitektur CPU yang dipakai perangkat.
+            - **Debian (.deb)**: `jhopan-vpn_<version>_amd64.deb` — versi, arsitektur (amd64/arm64 jika ada)
+            - **RPM (.rpm)**: `jhopan-vpn_<version>.x86_64.rpm` — versi, arsitektur (x86_64/aarch64 jika ada)
+            - **Windows (.exe)**: `jhopan-vpn-windows-<arch>.exe` — windows, arsitektur (amd64/386)
+            - **macOS (.dmg)**: `jhopan-vpn-macos-<arch>.dmg` — macos, arsitektur (amd64/arm64)
+            - **Manual Binary (.bin)**: `jhopan-vpn-<os>-<arch>.bin` — os, arsitektur
+
+            ## Panduan Instalasi
+
+            - Kalau masih ragu, pilih file **berdasarkan OS dan arsitektur CPU** perangkat Anda
+            - Untuk instalasi graphical, gunakan file `.deb`/`.rpm`/`.dmg`/`.exe`
+            - Untuk instalasi manual dari command line, gunakan `.bin` file
           files: release-files/*
           draft: false
           prerelease: false
