@@ -20,9 +20,11 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            cc: C:/msys64/mingw64/bin/gcc.exe
+            msystem: MINGW64
+            mingw_pkg: mingw-w64-x86_64-gcc
           - arch: 386
-            cc: C:/msys64/mingw32/bin/gcc.exe
+            msystem: MINGW32
+            mingw_pkg: mingw-w64-i686-gcc
 
     steps:
       - uses: actions/checkout@v4
@@ -34,20 +36,17 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
+          msystem: ${{ matrix.msystem }}
+          path-type: inherit
           update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-i686-gcc
+          install: ${{ matrix.mingw_pkg }}
 
       - name: Build Windows Executable
-        shell: powershell
+        shell: msys2 {0}
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $env:GOOS = "windows"
-          $env:GOARCH = "${{ matrix.arch }}"
-          $env:CGO_ENABLED = "1"
-          $env:CC = "${{ matrix.cc }}"
-
+          mkdir -p dist
+          export GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=1
+          export CC=gcc
           go build -ldflags="-s -w -H windowsgui" -o "dist/jhopan-vpn-windows-${{ matrix.arch }}.exe" .
 
       - uses: actions/upload-artifact@v4
