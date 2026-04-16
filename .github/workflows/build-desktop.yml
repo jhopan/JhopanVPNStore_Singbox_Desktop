@@ -176,10 +176,10 @@ jobs:
           # FPM .rpm output: jhopan-vpn-<VERSION>-<RELEASE>.x86_64.rpm (remove release number)
           DEB_FILE=$(ls jhopan-vpn_*_amd64.deb)
           RPM_FILE=$(ls jhopan-vpn-*-*.x86_64.rpm)
-          
+
           # Rename .deb to standardized format jhopan-vpn_<version>_amd64.deb
           mv "$DEB_FILE" "dist/jhopan-vpn_${VERSION}_amd64.deb"
-          
+
           # Rename .rpm to standardized format jhopan-vpn_<version>.x86_64.rpm
           mv "$RPM_FILE" "dist/jhopan-vpn_${VERSION}.x86_64.rpm"
 

@@ -18,6 +18,7 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\JhopanStoreVPN.exe
+AppMutex=Global\JhopanStoreVPN
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
