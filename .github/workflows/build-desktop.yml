@@ -73,11 +73,11 @@ jobs:
         run: |
           mkdir -p dist
           export GOOS=darwin GOARCH=${{ matrix.arch }} CGO_ENABLED=1
-          go build -ldflags="-s -w" -o dist/jhopan-vpn-macos-${{ matrix.arch }} .
+          go build -ldflags="-s -w" -o dist/jhopan-vpn-macos-${{ matrix.arch }}.bin .
 
           APP="dist/JhopanStoreVPN-${{ matrix.arch }}.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp dist/jhopan-vpn-macos-${{ matrix.arch }} "$APP/Contents/MacOS/jhopan-vpn"
+          cp dist/jhopan-vpn-macos-${{ matrix.arch }}.bin "$APP/Contents/MacOS/jhopan-vpn"
           chmod +x "$APP/Contents/MacOS/jhopan-vpn"
 
           cat > "$APP/Contents/Info.plist" << 'EOF'
@@ -107,7 +107,7 @@ jobs:
         with:
           name: jhopan-vpn-macos-${{ matrix.arch }}
           path: |
-            dist/jhopan-vpn-macos-${{ matrix.arch }}
+            dist/jhopan-vpn-macos-${{ matrix.arch }}.bin
             dist/jhopan-vpn-macos-${{ matrix.arch }}.dmg
 
   build-linux:
@@ -144,7 +144,7 @@ jobs:
         run: |
           mkdir -p dist
           export GOOS=linux GOARCH=amd64 CGO_ENABLED=1
-          go build -ldflags="-s -w" -o dist/jhopan-vpn-linux-amd64 .
+          go build -ldflags="-s -w" -o dist/jhopan-vpn-linux-amd64.bin .
 
       - name: Build .deb and .rpm packages
         run: |
@@ -154,7 +154,7 @@ jobs:
           fi
 
           mkdir -p package-root/usr/local/bin
-          cp dist/jhopan-vpn-linux-amd64 package-root/usr/local/bin/jhopan-vpn
+          cp dist/jhopan-vpn-linux-amd64.bin package-root/usr/local/bin/jhopan-vpn
           chmod +x package-root/usr/local/bin/jhopan-vpn
 
           fpm -s dir -t deb -n jhopan-vpn -v "$VERSION" -a amd64 \
@@ -176,7 +176,7 @@ jobs:
         with:
           name: jhopan-vpn-linux-packages
           path: |
-            dist/jhopan-vpn-linux-amd64
+            dist/jhopan-vpn-linux-amd64.bin
             dist/*.deb
             dist/*.rpm
 
@@ -235,14 +235,16 @@ jobs:
             | --- | --- | --- |
             | Windows 64-bit | `jhopan-vpn-windows-amd64.exe` | Untuk PC/laptop Windows modern |
             | Windows 32-bit | `jhopan-vpn-windows-386.exe` | Untuk Windows lama 32-bit |
-            | macOS Intel | `jhopan-vpn-macos-amd64.dmg` | Untuk Mac Intel / x86_64 |
-            | macOS Apple Silicon | `jhopan-vpn-macos-arm64.dmg` | Untuk Mac M1, M2, M3 dan seterusnya |
+            | macOS Intel | `jhopan-vpn-macos-amd64.dmg` | Installer untuk Mac Intel / x86_64 |
+            | macOS Apple Silicon | `jhopan-vpn-macos-arm64.dmg` | Installer untuk Mac M1, M2, M3 dan seterusnya |
+            | macOS Intel (manual) | `jhopan-vpn-macos-amd64.bin` | Jika ingin jalankan binary langsung |
+            | macOS Apple Silicon (manual) | `jhopan-vpn-macos-arm64.bin` | Jika ingin jalankan binary langsung |
             | Ubuntu / Debian | `jhopan-vpn-*.deb` | Untuk sistem berbasis Debian |
             | Fedora / RHEL / CentOS | `jhopan-vpn-*.rpm` | Untuk sistem berbasis RPM |
+            | Linux generic (manual) | `jhopan-vpn-linux-amd64.bin` | Jika tanpa paket manager |
 
             ## Catatan
-            - APK Android tidak disertakan lagi di release ini.
-            - Jika ingin instal manual Linux tanpa paket manager, gunakan `jhopan-vpn-linux-amd64`.
+            - Semua file build utama memakai ekstensi yang jelas: `.exe`, `.dmg`, `.bin`, `.deb`, `.rpm`.
 
             ## Ringkas
             - Kalau masih ragu, pilih sesuai OS dan arsitektur CPU yang dipakai perangkat.
